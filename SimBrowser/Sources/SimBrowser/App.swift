@@ -39,7 +39,11 @@ struct ContentView: View {
     @State private var search = ""
     @State private var ageFilter = "All"
     @State private var typeFilter: SimTypeFilter = .playable
-    @State private var selection: Sim?
+    @State private var selection = Set<Sim>()
+
+    private var selectedSim: Sim? {
+        selection.count == 1 ? selection.first : nil
+    }
 
     private var hood: Hood? {
         store.hoods.first { $0.id == hoodID } ?? store.hoods.first
@@ -75,9 +79,11 @@ struct ContentView: View {
             }
             .navigationSplitViewColumnWidth(min: 300, ideal: 340)
         } detail: {
-            if let sim = selection {
-                SimDetailView(sim: sim, hood: hood, onSelect: { selection = $0 })
+            if let sim = selectedSim {
+                SimDetailView(sim: sim, hood: hood, onSelect: { selection = [$0] })
                     .id(sim.nid)
+            } else if selection.count > 1 {
+                multiSelectionView
             } else {
                 placeholder
             }
@@ -87,13 +93,24 @@ struct ContentView: View {
             ToolbarItem(placement: .navigation) {
                 Picker("Neighborhood", selection: Binding(
                     get: { hood?.id ?? "" },
-                    set: { hoodID = $0; selection = nil }
+                    set: { hoodID = $0; selection = [] }
                 )) {
                     ForEach(store.hoods) { h in
                         Text("\(h.name) (\(h.id))").tag(h.id)
                     }
                 }
                 .pickerStyle(.menu)
+            }
+            ToolbarItem {
+                Menu {
+                    Button("Entire Neighborhood…") { export(hood?.sims ?? []) }
+                    Button("Current List (\(filteredSims.count))…") { export(filteredSims) }
+                    Button("Selected Sims (\(selection.count))…") { export(orderedSelection) }
+                        .disabled(selection.isEmpty)
+                } label: {
+                    Label("Export CSV", systemImage: "square.and.arrow.up")
+                }
+                .help("Export sims to a CSV file")
             }
             ToolbarItem {
                 Button {
@@ -148,6 +165,28 @@ struct ContentView: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
+    }
+
+    /// Selection in the list's visible order (so exports keep the current sort).
+    private var orderedSelection: [Sim] {
+        filteredSims.filter { selection.contains($0) }
+    }
+
+    private func export(_ sims: [Sim]) {
+        let name = hood?.name ?? "Sims"
+        CSVExporter.save(sims: sims, hoodName: name, suggestedName: "\(name) sims.csv")
+    }
+
+    private var multiSelectionView: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "person.3.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(.tertiary)
+            Text("\(selection.count) sims selected")
+                .font(.title3).foregroundStyle(.secondary)
+            Button("Export Selected as CSV…") { export(orderedSelection) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var placeholder: some View {
