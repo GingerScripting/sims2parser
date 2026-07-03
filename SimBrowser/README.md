@@ -1,0 +1,38 @@
+# Sim Browser
+
+A SimPE-style, read-only browser for The Sims 2 (Aspyr Super Collection) save files.
+Native SwiftUI front end; all file parsing happens in Python (`../s2neighborhood.py`).
+
+## Run it
+
+Double-click **Sim Browser.app** in the project folder, or rebuild it:
+
+```sh
+./make_app.sh          # builds release + assembles ../「Sim Browser.app」
+```
+
+For development: `swift run` inside this directory.
+
+## How it works
+
+1. `s2neighborhood.py` reads every neighborhood under the Aspyr container
+   (`~/Library/Containers/com.aspyr.sims2.appstore/…/The Sims 2/Neighborhoods`)
+   and writes JSON to `~/Library/Application Support/SimBrowser/sims.json`.
+   It parses SDSC (sim description), FAMI (households), LTXT (lot addresses),
+   FAMt (family ties), SREL (relationships), and CTSS (names/bios), plus
+   career/major names extracted from the game's own `objects.package` files
+   (cached in `../careers.json`).
+2. The app loads that JSON. **⌘R** (or the toolbar button) re-runs the extractor
+   to pick up new game saves. Everything is read-only — nothing ever writes to
+   the save files.
+
+Per sim you get: name, age, gender, zodiac, aspiration, orientation, household
++ address + funds, career with real job title and level, retired career,
+university major, bio, parents/spouse/siblings/children (clickable),
+personality/skills/interests, and flagged relationships (love, married, BFF,
+enemy, …) with daily/lifetime scores.
+
+## Settings
+
+- Extractor location (if the project moves):
+  `defaults write org.macadmins.rebecca.simbrowser extractorPath /path/to/s2neighborhood.py`
