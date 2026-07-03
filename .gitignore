@@ -4,3 +4,4 @@ sample-packages/
 SimBrowser/.build/
 Sim Browser.app/
 .DS_Store
+SimBrowser/.swiftpm/
