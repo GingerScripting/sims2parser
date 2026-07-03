@@ -32,6 +32,20 @@ university major, bio, parents/spouse/siblings/children (clickable),
 personality/skills/interests, and flagged relationships (love, married, BFF,
 enemy, …) with daily/lifetime scores.
 
+## CSV export
+
+The share button in the toolbar exports to CSV (UTF-8 with BOM, opens cleanly
+in Numbers/Excel) with three scopes:
+
+- **Entire Neighborhood** — every sim in the current hood
+- **Current List** — exactly what the sidebar shows (search + filters, in order)
+- **Selected Sims** — ⌘-click or ⇧-click to multi-select rows first
+
+Columns match the "Sims Reboot" spreadsheet style: First, Last, Household,
+Address, Hood, Age, Gender, Sign, Ambition, Major, Career, Job Title, Career
+Level, Retired From, Orientation, Mother, Father, Spouse, Siblings, Children,
+Best Friend, Loves, Enemies, Funds, Bio.
+
 ## Settings
 
 - Extractor location (if the project moves):
