@@ -35,8 +35,14 @@ TYPE_NAMES = {
     0x584D544F: "XMTO",
     0x584F424A: "XOBJ",
     0x6B6A4453: "kjDS",
-    0xAACE2EFB: "TXMT",
+    0xAACE2EFB: "SDSC",  # Sim Description (neighborhood packages)
     0xAC4F8687: "LIFO",
+    0xCC364C2A: "SREL",  # sim-to-sim relationship
+    0x0BF999E7: "LTXT",  # lot description
+    0x8C870743: "FAMT",  # family ties
+    0xCD95548E: "SWAF",  # wants and fears
+    0xAC8A7A2E: "IDNO",  # neighborhood ID
+    0xEBFEE33F: "PERS",  # person property set (XML)
     0xAC506764: "PGLN",
     0xE86B1EEF: "BINX",
     0xED534136: "COLL",

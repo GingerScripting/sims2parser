@@ -1,0 +1,645 @@
+{
+ "careers": {
+  "0xAC89E947": {
+   "track": "Teen Elder - Athletics",
+   "titles": [
+    "Waterperson",
+    "Locker Room Attendant",
+    "Team Mascot",
+    "Waterperson",
+    "Locker Room Attendant",
+    "Team Mascot",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0x4C1E0577": {
+   "track": "Teen Elder - Business",
+   "titles": [
+    "Gofer",
+    "Mailroom Technician",
+    "Executive Assistant",
+    "Gofer",
+    "Mailroom Technician",
+    "Executive Assistant",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0xACA07ACD": {
+   "track": "Teen Elder - Criminal",
+   "titles": [
+    "Street Hawker",
+    "Numbers Runner",
+    "Pickpocket",
+    "Street Hawker",
+    "Numbers Runner",
+    "Pickpocket",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0x4CA07B0C": {
+   "track": "Teen Elder - Culinary",
+   "titles": [
+    "Dishwasher",
+    "Drive Through Clerk",
+    "Fast Food Shift Manager",
+    "Dishwasher",
+    "Drive Through Clerk",
+    "Fast Food Shift Manager",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0x6CA07B39": {
+   "track": "Teen Elder - Law Enforcement",
+   "titles": [
+    "School Crossing Guard",
+    "Parking Lot Attendant",
+    "Security Guard",
+    "School Crossing Guard",
+    "Parking Lot Attendant",
+    "Security Guard",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0xAC89E918": {
+   "track": "Teen Elder - Medicine",
+   "titles": [
+    "Nursing Home Attendant",
+    "Orderly",
+    "Emergency Medical Technician",
+    "Nursing Home Attendant",
+    "Orderly",
+    "Emergency Medical Technician",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0xCCA07B66": {
+   "track": "Teen Elder - Military",
+   "titles": [
+    "Paintball Attendant",
+    "Recruit Training Corps",
+    "Recruit",
+    "Paintball Attendant",
+    "Recruit Training Corps",
+    "Recruit",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0xCCA07B8D": {
+   "track": "Teen Elder - Politics",
+   "titles": [
+    "Door to Door Poller",
+    "Campaign Worker",
+    "Intern",
+    "Door to Door Poller",
+    "Campaign Worker",
+    "Intern",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0xECA07BB0": {
+   "track": "Teen Elder - Science",
+   "titles": [
+    "Lab Glass Scrubber",
+    "Test Subject",
+    "Lab Assistant",
+    "Lab Glass Scrubber",
+    "Test Subject",
+    "Lab Assistant",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0x6CA07BDC": {
+   "track": "Teen Elder - Slacker",
+   "titles": [
+    "Golf Caddy",
+    "Gas Station Attendant",
+    "Convenience Store Clerk",
+    "Golf Caddy",
+    "Gas Station Attendant",
+    "Convenience Store Clerk",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0x2C89E95F": {
+   "track": "Adult - Athletics",
+   "titles": [
+    "Team Mascot",
+    "Minor Leaguer",
+    "Rookie",
+    "Starter",
+    "All Star",
+    "MVP",
+    "Superstar",
+    "Assistant Coach",
+    "Coach",
+    "Hall of Famer"
+   ]
+  },
+  "0x45196555": {
+   "track": "Adult - Business",
+   "titles": [
+    "Mailroom Technician",
+    "Executive Assistant",
+    "Field Sales Representative",
+    "Junior Executive",
+    "Executive",
+    "Senior Manager",
+    "Vice President",
+    "President",
+    "CEO",
+    "Business Tycoon"
+   ]
+  },
+  "0x6C9EBD0E": {
+   "track": "Adult - Criminal",
+   "titles": [
+    "Pickpocket",
+    "Bagman",
+    "Bookie",
+    "Con Artist",
+    "Getaway Driver",
+    "Bank Robber",
+    "Cat Burglar",
+    "Counterfeiter",
+    "Smuggler",
+    "Criminal Mastermind"
+   ]
+  },
+  "0xEC9EBD5F": {
+   "track": "Adult - Culinary",
+   "titles": [
+    "Dish Washer",
+    "Drive Through Clerk",
+    "Fast Food Shift Manager",
+    "Host",
+    "Waiter",
+    "Prep Cook",
+    "Sous Chef",
+    "Executive Chef",
+    "Restauranteur",
+    "Celebrity Chef"
+   ]
+  },
+  "0xAC9EBCE3": {
+   "track": "Adult - Law Enforcement",
+   "titles": [
+    "Security Guard",
+    "Cadet",
+    "Patrol Officer",
+    "Desk Sergeant",
+    "Vice Squad",
+    "Detective",
+    "Lieutenant",
+    "SWAT Team Leader",
+    "Police Chief",
+    "Captain Hero"
+   ]
+  },
+  "0x0C7761FD": {
+   "track": "Adult - Medicine",
+   "titles": [
+    "Emergency Medical Technician",
+    "Paramedic",
+    "Nurse",
+    "Intern",
+    "Resident",
+    "General Practioner",
+    "Specialist",
+    "Surgeon",
+    "Medical Researcher",
+    "Chief of Staff"
+   ]
+  },
+  "0x6C9EBD32": {
+   "track": "Adult - Military",
+   "titles": [
+    "Recruit",
+    "Elite Forces",
+    "Drill Instructor",
+    "Junior Officer",
+    "Counter Intelligence",
+    "Flight Officer",
+    "Senior Officer",
+    "Commander",
+    "Astronaut",
+    "General"
+   ]
+  },
+  "0x2C945B14": {
+   "track": "Adult - Politics",
+   "titles": [
+    "Campaign Worker",
+    "Intern",
+    "Lobbyist",
+    "Campaign Manager",
+    "City Council Member",
+    "State Assemblyperson",
+    "Congressperson",
+    "Judge",
+    "Senator",
+    "Mayor"
+   ]
+  },
+  "0xD06788B5": {
+   "track": "School - Public",
+   "titles": [
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0xCC8F4C11": {
+   "track": "School - Private",
+   "titles": [
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0x0C9EBD47": {
+   "track": "Adult - Science",
+   "titles": [
+    "Test Subject",
+    "Lab Assistant",
+    "Field Researcher",
+    "Science Teacher",
+    "Project Leader",
+    "Inventor",
+    "Scholar",
+    "Top Secret Researcher",
+    "Theorist",
+    "Mad Scientist"
+   ]
+  },
+  "0xEC77620B": {
+   "track": "Adult - Slacker",
+   "titles": [
+    "Golf Caddy",
+    "Gas Station Attendant",
+    "Convenience Store Clerk",
+    "Record Store Clerk",
+    "Party D.J.",
+    "Projectionist",
+    "Home Video Editor",
+    "Freelance Photographer",
+    "Freelance Web Designer ",
+    "Professional Party Guest"
+   ]
+  },
+  "0xB2428B0C": {
+   "track": "Adult - Music",
+   "titles": [
+    "Record Store Clerk",
+    "Piano Tuner",
+    "Coffee Shop Sound Engineer",
+    "Summer Camp Music Teacher",
+    "Battle of the Bands Judge",
+    "Roadie",
+    "Studio Musician",
+    "Concert Pianist",
+    "Symphony Conductor",
+    "Rock God"
+   ]
+  },
+  "0x12428B19": {
+   "track": "Adult - Law",
+   "titles": [
+    "File Clerk",
+    "Law Firm Receptionist",
+    "Legal Secretary",
+    "Legal Biller",
+    "Paralegal",
+    "Personal Injury Attorney",
+    "Family Law Attorney",
+    "International Corporate Lawyer",
+    "Entertainment Attorney",
+    "The Law"
+   ]
+  },
+  "0x7240D944": {
+   "track": "Adult - Journalism",
+   "titles": [
+    "Yearbook Club Supervisor",
+    "Blog Writer",
+    "Internet Movie Critic",
+    "Fact Checker",
+    "Obituary Writer",
+    "Horoscope Writer",
+    "Sports Columnist",
+    "Investigatory Journalist",
+    "Magazine Editor",
+    "Media Magnate"
+   ]
+  },
+  "0xF240C306": {
+   "track": "Adult - Gamer",
+   "titles": [
+    "Noob",
+    "Button Masher",
+    "Trash Talker",
+    "Gold Farmer",
+    "Flag Capturer",
+    "Platform Jumper",
+    "Power Leveler",
+    "Real Time Strategizer",
+    "Guild Leader",
+    "Game Designer"
+   ]
+  },
+  "0x72428B30": {
+   "track": "Adult - Education",
+   "titles": [
+    "Playground Monitor",
+    "Teacher's Aide",
+    "Substitute Teacher",
+    "Elementary School Teacher",
+    "High School Teacher",
+    "University Guest Lecturer",
+    "High School Principal",
+    "College Senior Professor",
+    "College Dean of Students",
+    "Education Minister"
+   ]
+  },
+  "0x3240CBA5": {
+   "track": "Adult - Adventurer",
+   "titles": [
+    "Ambassador's Intern",
+    "Spelunker",
+    "Multiregional Sim of Some Question",
+    "Deep Sea Excavator",
+    "Relic Liberator",
+    "Dread Pirate",
+    "Warhead Disarmer",
+    "Hostage Negotiator",
+    "International Sim of Mystery",
+    "Space Pirate"
+   ]
+  },
+  "0xB243BBD2": {
+   "track": "Teen Elder - Music",
+   "titles": [
+    "Record Store Clerk",
+    "Piano Tuner",
+    "Coffee Shop Sound Engineer",
+    "Record Store Clerk",
+    "Piano Tuner",
+    "Coffee Shop Sound Engineer",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0x1243BBDE": {
+   "track": "Teen Elder - Law",
+   "titles": [
+    "File Clerk",
+    "Law Firm Receptionist",
+    "Legal Secretary",
+    "File Clerk",
+    "Law Firm Receptionist",
+    "Legal Secretary",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0x5240E212": {
+   "track": "Teen Elder - Journalism",
+   "titles": [
+    "Yearbook Club Supervisor",
+    "Blog Writer",
+    "Internet Movie Critic",
+    "Yearbook Club Supervisor",
+    "Blog Writer",
+    "Internet Movie Critic",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0x1240C962": {
+   "track": "Teen Elder - Gamer",
+   "titles": [
+    "Noob",
+    "Button Masher",
+    "Trash Talker",
+    "Noob",
+    "Button Masher",
+    "Trash Talker",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0xD243BBEC": {
+   "track": "Teen Elder - Education",
+   "titles": [
+    "Playground Monitor",
+    "Teacher's Aide",
+    "Substitute Teacher",
+    "Playground Monitor",
+    "Teacher's Aide",
+    "Substitute Teacher",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0xF240D235": {
+   "track": "Teen Elder - Adventurer",
+   "titles": [
+    "Ambassador's Intern",
+    "Spelunker",
+    "Multiregional Sim of Some Question",
+    "Ambassador's Intern",
+    "Spelunker",
+    "Multiregional Sim of Some Question",
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "0x4E6FFFBC": {
+   "track": "Adult - Artist",
+   "titles": [
+    "Canvas Stretcher",
+    "Street Caricaturist",
+    "Souvenir Whittler",
+    "Comic Book Penciller",
+    "Wedding Photographer",
+    "Art Forger",
+    "Fashion Photographer",
+    "Acclaimed Muralist",
+    "Conceptual Artist",
+    "Visionary"
+   ]
+  },
+  "0xEE70001C": {
+   "track": "Adult - Natural Scientist",
+   "titles": [
+    "Rat Keeper",
+    "Algae Hunter",
+    "Clam Wrangler",
+    "Scatmaster",
+    "Soil Identifier",
+    "Rogue Botanist",
+    "Animal Linguist",
+    "Unnatural Crossbreeder",
+    "Dinosaur Cloner",
+    "Ecological Guru"
+   ]
+  },
+  "0x2E6FFF87": {
+   "track": "Adult - Paranormal",
+   "titles": [
+    "Psychic Phone Pal",
+    "Conspiracy Theorist",
+    "Tarot Card Reader",
+    "Hypnotist",
+    "Medium",
+    "Douser",
+    "Police Psychic",
+    "UFO Investigator",
+    "Exorcist",
+    "Cult Leader"
+   ]
+  },
+  "0xAE6FFFB0": {
+   "track": "Adult - ShowBiz",
+   "titles": [
+    "Screen Test Stand-In",
+    "Body Double",
+    "Bit Player",
+    "Commercial Actor",
+    "Cartoon Voice",
+    "Supporting Player",
+    "Broadway Star",
+    "Leading Man",
+    "Blockbuster Director",
+    "Icon"
+   ]
+  },
+  "0xD08F400A": {
+   "track": "Owned Business",
+   "titles": [
+    "Employee",
+    "Manager",
+    "Unused 3",
+    "Unused 4",
+    "Unused 5",
+    "Unused 6",
+    "Unused 7",
+    "Unused 8",
+    "Unused 9",
+    "Unused 10"
+   ]
+  },
+  "0x316BD91F": {
+   "track": "Owned Business - Teen",
+   "titles": [
+    "Employee",
+    "Manager",
+    "Unused 3",
+    "Unused 4",
+    "Unused 5",
+    "Unused 6",
+    "Unused 7",
+    "Unused 8",
+    "Unused 9",
+    "Unused 10"
+   ]
+  },
+  "0xD188A400": {
+   "track": "Pet - Security",
+   "titles": [
+    "Snooper Deterrent",
+    "Guard Pet",
+    "Contraband Sniffer",
+    "Pet Corps",
+    "Snooper Deterrent",
+    "Guard Pet",
+    "Contraband Sniffer",
+    "Pet Corps"
+   ]
+  },
+  "0xB188A4C1": {
+   "track": "Pet - Service",
+   "titles": [
+    "Vermin Chaser",
+    "Therapy Pet",
+    "Seeing Eye Pet",
+    "Rescue Pet",
+    "Vermin Chaser",
+    "Therapy Pet",
+    "Seeing Eye Pet",
+    "Rescue Pet"
+   ]
+  },
+  "0xD175CC2D": {
+   "track": "Pet - ShowBiz",
+   "titles": [
+    "Extra",
+    "Understudy",
+    "Stunt Double",
+    "Star",
+    "Extra",
+    "Understudy",
+    "Stunt Double",
+    "Star"
+   ]
+  }
+ },
+ "majors": {
+  "0x2E9CF007": "Art",
+  "0x4E9CF02B": "Biology",
+  "0x4E9CF04D": "Drama",
+  "0xEE9CF044": "Economics",
+  "0x2E9CF074": "History",
+  "0xCE9CF085": "Literature",
+  "0xEE9CF08D": "Mathematics",
+  "0x2E9CF057": "Philosophy",
+  "0xAE9CF063": "Physics",
+  "0x4E9CF06D": "Political Science",
+  "0xCE9CF07C": "Psychology",
+  "0x8E97BF1D": "Undeclared"
+ }
+}
