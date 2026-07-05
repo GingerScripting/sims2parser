@@ -229,71 +229,79 @@ def qfs_decompress(data: bytes) -> bytes:
 # BHAV (behavior) parsing — format version 0x8007 (Sims 2)
 # ---------------------------------------------------------------------------
 
-# Primitive opcodes (0x8000+)
+# SimAntics primitive opcodes (0x0000–0x00FF). Gaps are opcodes unused in
+# Sims 2. Names per Pick'N'Mix Sims 2 primitives reference:
+# https://www.picknmixmods.com/Sims2/Notes/Primitives/Primitives.html
 PRIMITIVES = {
-    0x8000: "Sleep",
-    0x8001: "Generic Sims call",
-    0x8002: "Expression",
-    0x8003: "Find best interaction",
-    0x8004: "Get object",
-    0x8005: "Call",
-    0x8006: "Find best",
-    0x8007: "Grab",
-    0x8008: "Push interaction",
-    0x8009: "Find interaction",
-    0x800A: "Test sim interaction ability",
-    0x800B: "Find best object for function",
-    0x800C: "SIME",
-    0x800D: "Animate sim",
-    0x800E: "Go to relative position",
-    0x800F: "Run tree by name",
-    0x8010: "Find best interaction by name",
-    0x8011: "Set motive change",
-    0x8012: "Get distance to object",
-    0x8013: "Get direction to object",
-    0x8014: "Create object",
-    0x8015: "Look at",
-    0x8016: "Play sound",
-    0x8017: "Old talk",
-    0x8018: "Relationship",
-    0x8019: "Change suit or accessory",
-    0x801A: "Set arbitrary attribute",
-    0x801B: "Object function",
-    0x801C: "Idle for input",
-    0x801D: "Remove object instance",
-    0x801E: "Transfer funds",
-    0x801F: "Refresh",
-    0x8020: "Multi-tile reference",
-    0x8021: "Find good location",
-    0x8022: "Change action string",
-    0x8023: "Test",
-    0x8024: "Notify stack object",
-    0x8025: "Set to next",
-    0x8026: "Show string",
-    0x8027: "Look at stack object",
-    0x8028: "Push sim to buy",
-    0x8029: "Find location",
-    0x802A: "Stop animation",
-    0x802B: "Drop",
-    0x802C: "Announce",
-    0x802D: "Noop",
-    0x802E: "Snap",
-    0x802F: "Find best design for sim",
-    0x8030: "Inventory",
-    0x8031: "Run postprocessor",
-    0x8032: "Run sub-tree",
-    0x8033: "Park vehicle",
-    0x8034: "Find place for sim",
-    0x8035: "Greedy transition",
-    0x8036: "Task request",
-    0x8037: "Find best object for interaction",
+    0x0000: "Sleep",
+    0x0001: "Generic Sims Call",
+    0x0002: "Expression",
+    0x0003: "Find Best Interaction",
+    0x0007: "Refresh",
+    0x0008: "Random Number",
+    0x000B: "Get Distance To",
+    0x000C: "Get Direction To",
+    0x000D: "Push Interaction",
+    0x000E: "Find Best Object for Function",
+    0x000F: "Break Point",
+    0x0010: "Find Location For",
+    0x0011: "Idle for Input",
+    0x0012: "Remove Object Instance",
+    0x0013: "Make New Character",
+    0x0014: "Run Functional Tree",
+    0x0016: "Turn Body Towards",
+    0x0017: "Play / Stop Sound Effect",
+    0x0019: "Alter Budget",
+    0x001A: "Relationship",
+    0x001B: "Go To Relative Position",
+    0x001C: "Run Tree by Name",
+    0x001D: "Set Motive Change",
+    0x001E: "Gosub Found Action",
+    0x001F: "Set to Next",
+    0x0020: "Test Object Type",
+    0x0021: "Find 5 Worst Motives",
+    0x0022: "UI Effect",
+    0x0023: "Camera Control",
+    0x0024: "Dialog",
+    0x0025: "Test Sim Interacting With",
+    0x002A: "Create New Object Instance",
+    0x002D: "Go To Routing Slot",
+    0x002E: "Snap",
+    0x0030: "Stop ALL Sounds",
+    0x0031: "Notify the SO out of Idle",
+    0x0032: "Add/Change the Action String",
+    0x0033: "Manage Inventory",
+    0x0069: "Animate Object",
+    0x006A: "Animate Sim",
+    0x006B: "Animate Overlay",
+    0x006C: "Animate Stop",
+    0x006D: "Change Material",
+    0x006E: "Look At",
+    0x006F: "Change Light",
+    0x0070: "Effect Stop/Start",
+    0x0071: "Snap Into",
+    0x0072: "Assign Locomotion Animations",
+    0x0073: "Debug",
+    0x0074: "Reach/Put",
+    0x0075: "Age",
+    0x0076: "Array Operation",
+    0x0077: "Message",
+    0x0078: "RayTrace",
+    0x0079: "Change Outfit",
+    0x007A: "On Timer",
+    0x007B: "Cinematic",
+    0x007C: "Want Satisfy",
+    0x007D: "Follow Sim",
+    0x007E: "LUA",
 }
 
-# Destination sentinel values (both 1-byte and 2-byte forms)
-# 0xFFFC is an alternate "exit true" used in 0x8007 BHAVs alongside 0xFFFF
-_TRUE_SENTINELS  = {0xFF, 0xFFFC, 0xFFFF}
-_FALSE_SENTINELS = {0xFE, 0xFFFE}
-_ERROR_SENTINELS = {0xFD, 0xFFFD}
+# Destination sentinel values for u16 branch targets (formats 0x8007/0x8009).
+# Verified empirically: 0xFFFD = return true, 0xFFFE = return false,
+# 0xFFFC = error. No 1-byte forms here — a low value like 0x00FD is a
+# legitimate instruction index in a large tree.
+_TRUE_SENTINELS  = {0xFFFD}
+_FALSE_SENTINELS = {0xFFFE}
+_ERROR_SENTINELS = {0xFFFC}
 
 def _dest_str(d: int) -> str:
     if d in _TRUE_SENTINELS:  return "→TRUE"
@@ -307,16 +315,21 @@ class BhavInstruction:
     opcode: int
     true_dest: int
     false_dest: int
-    operands: bytes  # 8 bytes
+    operands: bytes  # 16 bytes
 
     def opcode_name(self, bhav_names: dict[int, str] | None = None) -> str:
-        if self.opcode in PRIMITIVES:
-            return PRIMITIVES[self.opcode]
-        if self.opcode < 0x8000:
-            if bhav_names and self.opcode in bhav_names:
-                return f'CallBHAV → "{bhav_names[self.opcode]}"'
-            return f"CallBHAV({self.opcode:#06x})"
-        return f"0x{self.opcode:04X}"
+        # 0x0000–0x00FF: primitives; 0x0100–0x0FFF: global trees;
+        # 0x1000–0x1FFF: local (private) trees; 0x2000+: semiglobal trees.
+        # Tree calls use the target BHAV's instance ID as the opcode.
+        if self.opcode < 0x0100:
+            return PRIMITIVES.get(self.opcode, f"Primitive 0x{self.opcode:04X}")
+        if bhav_names and self.opcode in bhav_names:
+            return f'CallBHAV → "{bhav_names[self.opcode]}"'
+        if self.opcode < 0x1000:
+            return f"Global BHAV(0x{self.opcode:04X})"
+        if self.opcode < 0x2000:
+            return f"Local BHAV(0x{self.opcode:04X})"
+        return f"Semiglobal BHAV(0x{self.opcode:04X})"
 
     def fmt(self, bhav_names: dict[int, str] | None = None) -> str:
         ops = self.operands.hex(' ')
@@ -367,12 +380,14 @@ def parse_bhav(data: bytes) -> Bhav:
     if ver not in (0x8007, 0x8009):
         raise ValueError(f"Unsupported BHAV format version: 0x{ver:04X}")
 
-    # 0x8007: 4-byte extra header, then opcode(H) true(H) false(H) ops(8B) tail(9B) = 23 bytes/instr
-    # 0x8009: opcode(H) true(H) false(H) ops(8B) = 14 bytes/instr
+    # Both formats: opcode(H) true(H) false(H) ops(16B) tail(1B) = 23 bytes/instr.
+    # 0x8007 has a 4-byte extra header (instructions at 76); 0x8009 has a
+    # 5-byte extra header (instructions at 77) — verified empirically against
+    # Sim Blender.package, where offset 76 misaligns every 0x8009 instruction.
     if ver == 0x8007:
         instr_fmt, instr_size, ops_offset, instr_start = "<HHH", 23, 6, 76
     else:
-        instr_fmt, instr_size, ops_offset, instr_start = "<HHH", 14, 6, 72
+        instr_fmt, instr_size, ops_offset, instr_start = "<HHH", 23, 6, 77
 
     instrs = []
     pos = instr_start
@@ -380,7 +395,7 @@ def parse_bhav(data: bytes) -> Bhav:
         if pos + instr_size > len(data):
             break
         opcode, true_d, false_d = struct.unpack_from(instr_fmt, data, pos)
-        operands = data[pos + ops_offset:pos + ops_offset + 8]
+        operands = data[pos + ops_offset:pos + ops_offset + 16]
         instrs.append(BhavInstruction(opcode, true_d, false_d, operands))
         pos += instr_size
 
