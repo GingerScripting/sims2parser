@@ -7,7 +7,7 @@ struct SimDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 24) {
                 header
                 infoGrid
                 if !sim.bio.isEmpty { bioSection }
@@ -16,7 +16,7 @@ struct SimDetailView: View {
                 relationshipsSection
                 footer
             }
-            .padding(24)
+            .padding(32)
             .frame(maxWidth: 760, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -292,7 +292,7 @@ struct SimDetailView: View {
                 .kerning(0.5)
             content()
         }
-        .padding(14)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
     }
