@@ -9,6 +9,7 @@ struct SimBrowserApp: App {
         // Needed when launched as a bare SwiftPM executable so the window comes to front.
         NSApplication.shared.setActivationPolicy(.regular)
         DispatchQueue.main.async { NSApplication.shared.activate(ignoringOtherApps: true) }
+        GeometryProbe.mark("app init")
     }
 
     var body: some Scene {
@@ -68,8 +69,12 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        // Deliberately NOT NavigationSplitView: on macOS 26 its glass sidebar
+        // container re-lays-out 19.5pt off-window once a detail selection
+        // exists (measured with GeometryProbe), shifting the whole list left.
+        HStack(spacing: 0) {
             VStack(spacing: 0) {
+                searchField
                 filterBar
                 List(filteredSims, selection: $selection) { sim in
                     SimRow(sim: sim).tag(sim)
@@ -77,18 +82,20 @@ struct ContentView: View {
                 .listStyle(.inset)
                 statusBar
             }
-            .navigationSplitViewColumnWidth(min: 300, ideal: 340)
-        } detail: {
-            if let sim = selectedSim {
-                SimDetailView(sim: sim, hood: hood, onSelect: { selection = [$0] })
-                    .id(sim.nid)
-            } else if selection.count > 1 {
-                multiSelectionView
-            } else {
-                placeholder
+            .frame(width: 340)
+            Divider()
+            Group {
+                if let sim = selectedSim {
+                    DetailHost(sim: sim, hood: hood, onSelect: { selection = [$0] })
+                        .id(sim.nid)
+                } else if selection.count > 1 {
+                    multiSelectionView
+                } else {
+                    placeholder
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .searchable(text: $search, placement: .sidebar, prompt: "Name, household, career…")
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Picker("Neighborhood", selection: Binding(
@@ -122,7 +129,10 @@ struct ContentView: View {
                 .help("Re-read the game save files (⌘R)")
             }
         }
-        .onAppear { store.loadCachedOrRefresh() }
+        .onAppear {
+            store.loadCachedOrRefresh()
+            GeometryProbe.startIfRequested()
+        }
         .alert("Problem loading data", isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
@@ -131,6 +141,27 @@ struct ContentView: View {
         } message: {
             Text(store.errorMessage ?? "")
         }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Name, household, career…", text: $search)
+                .textFieldStyle(.plain)
+            if !search.isEmpty {
+                Button {
+                    search = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7))
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
     }
 
     private var filterBar: some View {
@@ -206,8 +237,31 @@ struct ContentView: View {
     }
 }
 
+/// Hosts the detail pane in its own NSHostingView so its ScrollView is
+/// invisible to the root SwiftUI layout. On macOS 26, a ScrollView in the
+/// root hierarchy makes SwiftUI extend the whole layout past the window
+/// edges ("concentric" glass insets), sliding the sidebar list 16pt
+/// off-window (measured with GeometryProbe).
+struct DetailHost: NSViewRepresentable {
+    let sim: Sim
+    let hood: Hood?
+    var onSelect: (Sim) -> Void
+
+    func makeNSView(context: Context) -> NSHostingView<SimDetailView> {
+        let v = NSHostingView(rootView: SimDetailView(sim: sim, hood: hood, onSelect: onSelect))
+        v.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        v.setContentHuggingPriority(.defaultLow, for: .vertical)
+        return v
+    }
+
+    func updateNSView(_ nsView: NSHostingView<SimDetailView>, context: Context) {
+        nsView.rootView = SimDetailView(sim: sim, hood: hood, onSelect: onSelect)
+    }
+}
+
 struct SimRow: View {
     let sim: Sim
+
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
