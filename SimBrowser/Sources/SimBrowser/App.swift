@@ -208,7 +208,7 @@ struct ContentView: View {
             .pickerStyle(.menu)
             .fixedSize()
             Picker("", selection: $ageFilter) {
-                ForEach(["All", "Baby", "Toddler", "Child", "Teen", "Adult", "Elder"], id: \.self) {
+                ForEach(["All", "Baby", "Toddler", "Child", "Teen", "Young Adult", "Adult", "Elder"], id: \.self) {
                     Text($0).tag($0)
                 }
             }
@@ -363,6 +363,7 @@ struct SimRow: View {
         case "Baby", "Toddler": return .pink
         case "Child": return .orange
         case "Teen": return .yellow
+        case "Young Adult": return .green
         case "Adult": return .blue
         case "Elder": return .purple
         default: return .gray

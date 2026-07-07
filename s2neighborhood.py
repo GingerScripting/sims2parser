@@ -172,11 +172,17 @@ def parse_sdsc(d: bytes) -> dict:
     pref_m, pref_f = i16(d, 0x38), i16(d, 0x3A)
     career_track, career_title = career_info(career_guid, career_level)
     retired_track, retired_title = career_info(retired_guid, retired_level)
+    on_campus = u16(d, 0x16A) == 1
+    age = AGE_STAGES.get(u16(d, 0x80), f"?{u16(d, 0x80)}")
+    # University overlay stage: the age field stays "Adult" while at college;
+    # the on-campus flag is what makes a sim a Young Adult.
+    if on_campus and age == "Adult":
+        age = "Young Adult"
     return {
         "nid": u16(d, 0x1A4),
         "guid": u32(d, 0x1A6),
         "family_id": u16(d, 0x86),
-        "age": AGE_STAGES.get(u16(d, 0x80), f"?{u16(d, 0x80)}"),
+        "age": age,
         "gender": "Female" if u16(d, 0x8E) == 1 else "Male",
         "zodiac": ZODIAC.get(u16(d, 0x98), ""),
         "aspirations": aspirations,
@@ -192,7 +198,7 @@ def parse_sdsc(d: bytes) -> dict:
                   if major_guid and major_guid != MAJOR_UNDECLARED else
                   ("Undeclared" if major_guid == MAJOR_UNDECLARED else "")),
         "semester": u16(d, 0x168),
-        "on_campus": u16(d, 0x16A) == 1,
+        "on_campus": on_campus,
         "grade": u16(d, 0x7C),
         "pref_male": pref_m,
         "pref_female": pref_f,
@@ -348,6 +354,9 @@ def extract_hood(nbr_dir: Path) -> dict | None:
                     s["last"] = ch.get("last", "")
                     s["bio"] = ch.get("bio", "")
                     s["char_file"] = ch.get("file", "")
+                    # Skip orphaned placeholder records (no character, no age)
+                    if s["age"] == "?0" and not s["char_file"]:
+                        continue
                     sims[s["nid"]] = s
                 elif e.type_id == TID_LTXT:
                     d = read_resource(f, e)
