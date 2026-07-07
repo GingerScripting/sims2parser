@@ -242,14 +242,18 @@ struct ContentView: View {
                 }
                 .disabled(activeExtraFilterCount == 0 && ageFilter == "All")
             } label: {
-                Label(
-                    activeExtraFilterCount > 0 ? "Filters (\(activeExtraFilterCount))" : "Filters",
-                    systemImage: "line.3.horizontal.decrease.circle"
-                )
+                if activeExtraFilterCount > 0 {
+                    Label("\(activeExtraFilterCount)", systemImage: "line.3.horizontal.decrease.circle.fill")
+                } else {
+                    Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
+                        .labelStyle(.iconOnly)
+                }
             }
             .fixedSize()
+            .help("More filters: gender, aspiration, married, in college…")
             Spacer()
         }
+        .controlSize(.small)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
     }
