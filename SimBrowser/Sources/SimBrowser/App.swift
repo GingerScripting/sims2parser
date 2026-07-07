@@ -34,13 +34,46 @@ enum SimTypeFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Attribute filters that AND together (e.g. Married + In College).
+enum TraitFilter: String, CaseIterable, Identifiable {
+    case married = "Married"
+    case inCollege = "In College"
+    case employed = "Employed"
+    case retired = "Retired"
+    case hasChildren = "Has Children"
+    case inLove = "In Love"
+    case hasEnemies = "Has Enemies"
+    var id: String { rawValue }
+
+    func matches(_ s: Sim) -> Bool {
+        switch self {
+        case .married: return !s.spouse.isEmpty
+        case .inCollege: return s.onCampus
+        case .employed: return !s.career.isEmpty
+        case .retired: return !s.retiredCareer.isEmpty
+        case .hasChildren: return !s.children.isEmpty
+        case .inLove: return !s.loves.isEmpty
+        case .hasEnemies: return !s.enemies.isEmpty
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var store: DataStore
     @State private var hoodID: String?
     @State private var search = ""
     @State private var ageFilter = "All"
     @State private var typeFilter: SimTypeFilter = .playable
+    @State private var genderFilter = "All"
+    @State private var aspirationFilter = "All"
+    @State private var traitFilters = Set<TraitFilter>()
     @State private var selection = Set<Sim>()
+
+    private var activeExtraFilterCount: Int {
+        traitFilters.count
+            + (genderFilter == "All" ? 0 : 1)
+            + (aspirationFilter == "All" ? 0 : 1)
+    }
 
     private var selectedSim: Sim? {
         selection.count == 1 ? selection.first : nil
@@ -60,6 +93,9 @@ struct ContentView: View {
             case .all: break
             }
             if ageFilter != "All" && s.age != ageFilter { return false }
+            if genderFilter != "All" && s.gender != genderFilter { return false }
+            if aspirationFilter != "All" && !s.aspirations.contains(aspirationFilter) { return false }
+            for trait in traitFilters where !trait.matches(s) { return false }
             if !q.isEmpty {
                 let hay = "\(s.fullName) \(s.household) \(s.address) \(s.career) \(s.careerTitle) \(s.major) \(s.bio)".lowercased()
                 if !hay.contains(q) { return false }
@@ -178,8 +214,46 @@ struct ContentView: View {
             }
             .pickerStyle(.menu)
             .fixedSize()
+            Menu {
+                Picker("Gender", selection: $genderFilter) {
+                    ForEach(["All", "Female", "Male"], id: \.self) { Text($0).tag($0) }
+                }
+                Picker("Aspiration", selection: $aspirationFilter) {
+                    ForEach(["All", "Romance", "Family", "Fortune", "Popularity",
+                             "Knowledge", "Pleasure", "Grow Up", "Grilled Cheese"], id: \.self) {
+                        Text($0).tag($0)
+                    }
+                }
+                Divider()
+                ForEach(TraitFilter.allCases) { trait in
+                    Toggle(trait.rawValue, isOn: Binding(
+                        get: { traitFilters.contains(trait) },
+                        set: { on in
+                            if on { traitFilters.insert(trait) } else { traitFilters.remove(trait) }
+                        }
+                    ))
+                }
+                Divider()
+                Button("Clear Filters") {
+                    traitFilters = []
+                    genderFilter = "All"
+                    aspirationFilter = "All"
+                    ageFilter = "All"
+                }
+                .disabled(activeExtraFilterCount == 0 && ageFilter == "All")
+            } label: {
+                if activeExtraFilterCount > 0 {
+                    Label("\(activeExtraFilterCount)", systemImage: "line.3.horizontal.decrease.circle.fill")
+                } else {
+                    Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
+                        .labelStyle(.iconOnly)
+                }
+            }
+            .fixedSize()
+            .help("More filters: gender, aspiration, married, in college…")
             Spacer()
         }
+        .controlSize(.small)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
     }

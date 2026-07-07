@@ -94,27 +94,38 @@ def i32(d, off): return struct.unpack_from("<i", d, off)[0] if off + 4 <= len(d)
 # ---------------------------------------------------------------------------
 
 def parse_ctss_strings(data: bytes) -> list[str]:
-    """English strings from a CTSS resource, in order (first, bio, last for sims)."""
+    """English strings from a CTSS resource, in order (first, bio, last for sims).
+
+    Format 0xFFFD entries are (language byte, value cstring, description
+    cstring). The description must be consumed even when empty, or entries
+    with blank descriptions (in-game-born sims) shift the parse off by one
+    and lose the last name.
+    """
     idx = data.find(b'\xfd\xff')
     if idx < 0:
         return []
+    count = struct.unpack_from("<H", data, idx + 2)[0]
     pos = idx + 4
-    out = []
-    while pos < len(data) and len(out) < 3:
-        lang = data[pos]; pos += 1
-        end = data.find(b'\x00', pos)
+
+    def cstring(p: int) -> tuple[str, int]:
+        end = data.find(b'\x00', p)
         if end < 0:
-            break
-        raw = data[pos:end]
+            return "", len(data)
+        raw = data[p:end]
         try:
-            text = raw.decode('utf-8').strip()
+            return raw.decode('utf-8').strip(), end + 1
         except UnicodeDecodeError:
-            text = raw.decode('latin-1', errors='replace').strip()
-        pos = end + 1
+            return raw.decode('latin-1', errors='replace').strip(), end + 1
+
+    out = []
+    for _ in range(min(count, 64)):
+        if pos >= len(data):
+            break
+        lang = data[pos]; pos += 1
+        value, pos = cstring(pos)
+        _desc, pos = cstring(pos)
         if lang == 1:
-            out.append(text)
-        elif lang == 84:
-            continue
+            out.append(value)
     return out
 
 
