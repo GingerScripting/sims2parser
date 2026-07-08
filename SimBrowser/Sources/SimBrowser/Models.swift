@@ -92,6 +92,9 @@ struct Sim: Decodable, Identifiable, Hashable {
     /// Family instances at or above 0x7FDF are engine pools (townies, NPCs, adoption…)
     var isPlayable: Bool { familyId > 0 && familyId < 0x7FDF }
     var isNPC: Bool { npcType != 0 }
+    /// In a real family but not placed on any lot (e.g. unplaced premade
+    /// university students, families moved to the bin).
+    var isInFamilyBin: Bool { isPlayable && !household.isEmpty && address.isEmpty }
 
     var careerDisplay: String {
         if !careerTitle.isEmpty { return careerTitle }

@@ -43,6 +43,7 @@ enum TraitFilter: String, CaseIterable, Identifiable {
     case hasChildren = "Has Children"
     case inLove = "In Love"
     case hasEnemies = "Has Enemies"
+    case inFamilyBin = "In Family Bin"
     var id: String { rawValue }
 
     func matches(_ s: Sim) -> Bool {
@@ -54,6 +55,7 @@ enum TraitFilter: String, CaseIterable, Identifiable {
         case .hasChildren: return !s.children.isEmpty
         case .inLove: return !s.loves.isEmpty
         case .hasEnemies: return !s.enemies.isEmpty
+        case .inFamilyBin: return s.isInFamilyBin
         }
     }
 }
