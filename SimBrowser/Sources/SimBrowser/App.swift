@@ -246,6 +246,61 @@ struct ContentView: View {
 
     @ViewBuilder
     private var journalDetail: some View {
+        VStack(spacing: 0) {
+            if let hoodID = hood?.id, let changes = store.detectedChanges[hoodID], !changes.isEmpty {
+                changesBanner(hoodID: hoodID, changes: changes)
+                Divider()
+            }
+            journalEditorArea
+        }
+    }
+
+    private func changesBanner(hoodID: String, changes: [String]) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(changes.count) change\(changes.count == 1 ? "" : "s") detected since the last save read")
+                    .font(.callout).fontWeight(.medium)
+                Text(changes.prefix(2).joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Button("Insert into Entry") {
+                insertChanges(hoodID: hoodID, changes: changes)
+            }
+            Button {
+                store.clearChanges(hoodID: hoodID)
+            } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Discard detected changes")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.orange.opacity(0.08))
+    }
+
+    private func insertChanges(hoodID: String, changes: [String]) {
+        // Target the selected entry, or create the next season's entry
+        let entryID: UUID
+        if let sel = journalSelection, journal.binding(hoodID: hoodID, id: sel) != nil {
+            entryID = sel
+        } else {
+            entryID = journal.addEntry(hoodID: hoodID).id
+            journalSelection = entryID
+        }
+        guard let binding = journal.binding(hoodID: hoodID, id: entryID) else { return }
+        var body = binding.wrappedValue.body
+        if !body.isEmpty && !body.hasSuffix("\n") { body += "\n" }
+        body += changes.map { "- \($0)" }.joined(separator: "\n") + "\n"
+        binding.wrappedValue.body = body
+        store.clearChanges(hoodID: hoodID)
+    }
+
+    @ViewBuilder
+    private var journalEditorArea: some View {
         if let hoodID = hood?.id,
            let entryID = journalSelection,
            let binding = journal.binding(hoodID: hoodID, id: entryID) {

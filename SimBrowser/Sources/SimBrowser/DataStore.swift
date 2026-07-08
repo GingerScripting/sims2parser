@@ -7,6 +7,10 @@ final class DataStore: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var lastRefreshed: Date?
+    /// hood id → change lines detected at the last refresh, until inserted/dismissed
+    @Published var detectedChanges: [String: [String]] = [:] {
+        didSet { persistChanges() }
+    }
 
     /// Where the extractor script lives. Override with `defaults write com.rebecca.SimBrowser extractorPath …`
     var extractorPath: String {
@@ -21,11 +25,31 @@ final class DataStore: ObservableObject {
         return dir.appendingPathComponent("sims.json")
     }
 
+    private var changesURL: URL {
+        dataURL.deletingLastPathComponent().appendingPathComponent("pending_changes.json")
+    }
+
     func loadCachedOrRefresh() {
+        if let data = try? Data(contentsOf: changesURL),
+           let saved = try? JSONDecoder().decode([String: [String]].self, from: data) {
+            detectedChanges = saved
+        }
         if FileManager.default.fileExists(atPath: dataURL.path) {
             loadFromDisk()
         } else {
             refresh()
+        }
+    }
+
+    func clearChanges(hoodID: String) {
+        detectedChanges[hoodID] = nil
+    }
+
+    private func persistChanges() {
+        if detectedChanges.isEmpty {
+            try? FileManager.default.removeItem(at: changesURL)
+        } else if let data = try? JSONEncoder().encode(detectedChanges) {
+            try? data.write(to: changesURL, options: .atomic)
         }
     }
 
@@ -50,6 +74,7 @@ final class DataStore: ObservableObject {
         errorMessage = nil
         let script = extractorPath
         let out = dataURL
+        let previousHoods = hoods
 
         Task.detached(priority: .userInitiated) {
             let process = Process()
@@ -80,6 +105,13 @@ final class DataStore: ObservableObject {
                     self.errorMessage = failure
                 } else {
                     self.loadFromDisk()
+                    if !previousHoods.isEmpty {
+                        let diff = ChangeDetector.diff(old: previousHoods, new: self.hoods)
+                        // Merge with anything still pending from earlier refreshes
+                        for (hoodID, lines) in diff {
+                            self.detectedChanges[hoodID, default: []].append(contentsOf: lines)
+                        }
+                    }
                 }
             }
         }
