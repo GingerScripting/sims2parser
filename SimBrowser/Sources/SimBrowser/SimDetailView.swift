@@ -41,6 +41,7 @@ struct SimDetailView: View {
                 if sim.isNPC { badge("NPC", color: .gray) }
                 if !sim.isPlayable && !sim.isNPC { badge("Townie", color: .gray) }
                 if sim.onCampus { badge("At university", color: .green) }
+                if sim.isInFamilyBin { badge("Family Bin", color: .brown) }
             }
         }
     }
@@ -60,7 +61,8 @@ struct SimDetailView: View {
             Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 6) {
                 if !sim.household.isEmpty {
                     row("Household", "\(sim.household) family")
-                    row("Address", sim.address.isEmpty ? "—" : sim.address)
+                    row("Address", sim.isInFamilyBin ? "Family Bin (not placed on a lot)"
+                                                     : (sim.address.isEmpty ? "—" : sim.address))
                     row("Funds", "§\(sim.funds.formatted())")
                 }
                 if !sim.careerDisplay.isEmpty {
