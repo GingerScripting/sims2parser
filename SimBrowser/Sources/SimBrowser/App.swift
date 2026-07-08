@@ -60,8 +60,16 @@ enum TraitFilter: String, CaseIterable, Identifiable {
     }
 }
 
+enum ViewMode: String, CaseIterable {
+    case sims = "Sims"
+    case journal = "Journal"
+}
+
 struct ContentView: View {
     @EnvironmentObject var store: DataStore
+    @StateObject private var journal = JournalStore()
+    @State private var mode: ViewMode = .sims
+    @State private var journalSelection: UUID?
     @State private var hoodID: String?
     @State private var search = ""
     @State private var ageFilter = "All"
@@ -112,20 +120,35 @@ struct ContentView: View {
         // exists (measured with GeometryProbe), shifting the whole list left.
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-                searchField
-                filterBar
-                List(filteredSims, selection: $selection) { sim in
-                    SimRow(sim: sim).tag(sim)
+                modePicker
+                if mode == .sims {
+                    searchField
+                    filterBar
+                    List(filteredSims, selection: $selection) { sim in
+                        SimRow(sim: sim).tag(sim)
+                    }
+                    .listStyle(.inset)
+                    statusBar
+                } else {
+                    journalList
                 }
-                .listStyle(.inset)
-                statusBar
             }
             .frame(width: 340)
             Divider()
             Group {
-                if let sim = selectedSim {
-                    DetailHost(sim: sim, hood: hood, onSelect: { selection = [$0] })
-                        .id(sim.nid)
+                if mode == .journal {
+                    journalDetail
+                } else if let sim = selectedSim {
+                    DetailHost(
+                        sim: sim, hood: hood,
+                        onSelect: { selection = [$0] },
+                        journalMentions: journal.mentions(of: sim.fullName, hoodID: hood?.id ?? ""),
+                        onOpenJournal: { entryID in
+                            journalSelection = entryID
+                            mode = .journal
+                        }
+                    )
+                    .id(sim.nid)
                 } else if selection.count > 1 {
                     multiSelectionView
                 } else {
@@ -178,6 +201,71 @@ struct ContentView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(store.errorMessage ?? "")
+        }
+    }
+
+    private var modePicker: some View {
+        Picker("", selection: $mode) {
+            ForEach(ViewMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+    }
+
+    private var journalEntries: [JournalEntry] {
+        journal.entries(for: hood?.id ?? "")
+    }
+
+    private var journalList: some View {
+        VStack(spacing: 0) {
+            List(journalEntries, selection: $journalSelection) { entry in
+                JournalRow(entry: entry).tag(entry.id)
+            }
+            .listStyle(.inset)
+            Divider()
+            HStack {
+                Button {
+                    guard let hoodID = hood?.id else { return }
+                    let entry = journal.addEntry(hoodID: hoodID)
+                    journalSelection = entry.id
+                } label: {
+                    Label("New Entry", systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+                Spacer()
+                Text("\(journalEntries.count) entries")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+        }
+        .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private var journalDetail: some View {
+        if let hoodID = hood?.id,
+           let entryID = journalSelection,
+           let binding = journal.binding(hoodID: hoodID, id: entryID) {
+            IsolatedPane {
+                JournalEditorView(entry: binding, onDelete: {
+                    journal.deleteEntry(hoodID: hoodID, id: entryID)
+                    journalSelection = nil
+                })
+            }
+            .id(entryID)
+        } else {
+            VStack(spacing: 12) {
+                Image(systemName: "book.closed")
+                    .font(.system(size: 44)).foregroundStyle(.tertiary)
+                Text("Select or create a journal entry")
+                    .font(.title3).foregroundStyle(.secondary)
+                Text("One entry per season — what happened in \(hood?.name ?? "this neighborhood") this rotation.")
+                    .font(.callout).foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -322,16 +410,23 @@ struct DetailHost: NSViewRepresentable {
     let sim: Sim
     let hood: Hood?
     var onSelect: (Sim) -> Void
+    var journalMentions: [JournalMention] = []
+    var onOpenJournal: (UUID) -> Void = { _ in }
+
+    private var detailView: SimDetailView {
+        SimDetailView(sim: sim, hood: hood, onSelect: onSelect,
+                      journalMentions: journalMentions, onOpenJournal: onOpenJournal)
+    }
 
     func makeNSView(context: Context) -> NSHostingView<SimDetailView> {
-        let v = NSHostingView(rootView: SimDetailView(sim: sim, hood: hood, onSelect: onSelect))
+        let v = NSHostingView(rootView: detailView)
         v.setContentHuggingPriority(.defaultLow, for: .horizontal)
         v.setContentHuggingPriority(.defaultLow, for: .vertical)
         return v
     }
 
     func updateNSView(_ nsView: NSHostingView<SimDetailView>, context: Context) {
-        nsView.rootView = SimDetailView(sim: sim, hood: hood, onSelect: onSelect)
+        nsView.rootView = detailView
     }
 }
 
