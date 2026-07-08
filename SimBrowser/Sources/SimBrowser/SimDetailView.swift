@@ -37,6 +37,7 @@ struct SimDetailView: View {
                 }
             }
             HStack(spacing: 6) {
+                if sim.isDead { badge("Deceased", color: .gray) }
                 badge(sim.age, color: .blue)
                 badge(sim.gender, color: sim.gender == "Female" ? .pink : .teal)
                 ForEach(sim.aspirations, id: \.self) { badge($0, color: .indigo) }

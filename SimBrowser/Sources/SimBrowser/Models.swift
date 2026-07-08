@@ -95,6 +95,9 @@ struct Sim: Decodable, Identifiable, Hashable {
     /// In a real family but not placed on any lot (e.g. unplaced premade
     /// university students, families moved to the bin).
     var isInFamilyBin: Bool { isPlayable && !household.isEmpty && address.isEmpty }
+    /// Nonzero ghost flags = deceased (verified against an in-game death:
+    /// the record persists but ghost flags flip on and the family drops them).
+    var isDead: Bool { ghostFlags != 0 }
 
     var careerDisplay: String {
         if !careerTitle.isEmpty { return careerTitle }

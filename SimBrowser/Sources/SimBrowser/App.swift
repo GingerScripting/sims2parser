@@ -44,6 +44,7 @@ enum TraitFilter: String, CaseIterable, Identifiable {
     case inLove = "In Love"
     case hasEnemies = "Has Enemies"
     case inFamilyBin = "In Family Bin"
+    case deceased = "Deceased"
     var id: String { rawValue }
 
     func matches(_ s: Sim) -> Bool {
@@ -56,6 +57,7 @@ enum TraitFilter: String, CaseIterable, Identifiable {
         case .inLove: return !s.loves.isEmpty
         case .hasEnemies: return !s.enemies.isEmpty
         case .inFamilyBin: return s.isInFamilyBin
+        case .deceased: return s.isDead
         }
     }
 }
@@ -98,7 +100,9 @@ struct ContentView: View {
         let q = search.lowercased()
         return hood.sims.filter { s in
             switch typeFilter {
-            case .playable: if !s.isPlayable { return false }
+            // Dead sims leave their family (family id 0), so keep them
+            // visible in the Playable view rather than vanishing on death.
+            case .playable: if !s.isPlayable && !s.isDead { return false }
             case .townies: if s.isPlayable { return false }
             case .all: break
             }
@@ -507,6 +511,7 @@ struct SimRow: View {
         var parts: [String] = []
         if !sim.household.isEmpty { parts.append("\(sim.household) household") }
         if !sim.careerDisplay.isEmpty { parts.append(sim.careerDisplay) }
+        if sim.isDead { parts.insert("Deceased", at: 0) }
         if parts.isEmpty && sim.isNPC { parts.append("NPC") }
         return parts.joined(separator: " · ")
     }

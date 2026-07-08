@@ -24,6 +24,7 @@ enum ChangeDetector {
 
         for sim in new.sims {
             seen.insert(sim.guid)
+            guard !sim.first.isEmpty else { continue }  // nameless placeholder records
             guard let prev = oldByGUID[sim.guid] else {
                 // Newly appeared — only report real family members, not townie churn
                 if sim.isPlayable {
@@ -42,8 +43,8 @@ enum ChangeDetector {
             lines.append(contentsOf: diffSim(prev: prev, cur: sim))
         }
 
-        for prev in old.sims where prev.isPlayable && !seen.contains(prev.guid) {
-            lines.append("\(prev.fullName) is no longer in the neighborhood (moved away or died)")
+        for prev in old.sims where prev.isPlayable && !prev.first.isEmpty && !seen.contains(prev.guid) {
+            lines.append("\(prev.fullName) is no longer in the neighborhood (moved away)")
         }
         return lines
     }
@@ -51,6 +52,12 @@ enum ChangeDetector {
     private static func diffSim(prev: Sim, cur: Sim) -> [String] {
         var lines: [String] = []
         let name = cur.fullName
+
+        // Death: the record persists as a ghost; the family drops the sim.
+        // Report it alone — the household/career fallout is just death's echo.
+        if !prev.isDead && cur.isDead {
+            return ["\(name) died"]
+        }
 
         // Life stage
         if prev.age != cur.age {
