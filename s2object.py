@@ -102,14 +102,17 @@ def expr(lhs, rhs, operator, lhs_owner, rhs_owner, t=None, f=RET_ERROR):
 
 
 def inv_ops(operation: int, guid: int = 0, *, inv_type: int = INV_GLOBAL,
+            owner_scope: int = 0, owner_id: int = 0,
             sel_scope: int = 0, sel_id: int = 0,
             val_scope: int = 0, val_id: int = 0, cat: int = 0) -> bytes:
-    """Manage Inventory (0x0033) operands. sel = iterator index var (find/bind/
-    remove) or property selector (getprop/setprop); val = value var for
-    getprop (dest) / setprop (src). Global inventory needs no owner fields.
-    cat (b0) = token category: ffsdebugger filters urn tokens with cat=2;
-    cat=0 appears to be a wildcard match on find."""
-    return bytes([cat, inv_type, 0, 0, 0, operation,
+    """Manage Inventory (0x0033) operands. owner = whose inventory for
+    inv_type=NEIGHBOR (scope+id of a variable holding the NID: Monique uses
+    param 0x09, ffsdebugger my-person-data 0x12/0x1F, ACR stack-obj person
+    data 0x13/0x1F). sel = iterator index var (find/remove); val = value var
+    (count dest). NOTE: the GLOBAL inventory (b1=0) is the gossip store —
+    find ignores the GUID there; do not use it for mod tokens."""
+    return bytes([cat, inv_type, owner_scope, owner_id & 0xFF, owner_id >> 8,
+                  operation,
                   guid & 0xFF, (guid >> 8) & 0xFF, (guid >> 16) & 0xFF, guid >> 24,
                   0, sel_scope, sel_id, 0, val_scope, val_id])
 
@@ -176,15 +179,20 @@ def str_resource(name: str, strings: list[str], lang: int = 1) -> bytes:
 
 def ttab(entry_template: bytes, entries: list[tuple[int, int, int]],
          name: str = 'Interaction Table') -> bytes:
-    """entries: (action_tree, guard_tree, ttas_index)."""
-    if len(entry_template) != 74:
-        raise ValueError(f"TTAB entry template must be 74 bytes, got {len(entry_template)}")
+    """TTAB version 0x54 (fully documented; Sim Blender-proven at 81
+    entries). Entry: action u16, guard u16, flags u16 x2, TTAs index u32 @+8,
+    attenuation code u32/value f32, autonomy u32, join u32, UI type u16,
+    facial u32, memory mult f32, object type u32, model table u32,
+    ad-table count u32 (=1), ad-table length u32 (=0) -> 54 bytes fixed.
+    entries: (action_tree, guard_tree, ttas_index)."""
+    if len(entry_template) != 54:
+        raise ValueError(f"TTAB v0x54 entry template must be 54 bytes, got {len(entry_template)}")
     out = bytearray(_name64(name))
-    out += struct.pack('<IIIH', 0xFFFFFFFF, 0x4F, 0, len(entries))
+    out += struct.pack('<IIIH', 0xFFFFFFFF, 0x54, 0, len(entries))
     for action, guard, sidx in entries:
         e = bytearray(entry_template)
         struct.pack_into('<HH', e, 0, action, guard)
-        struct.pack_into('<I', e, 36, sidx)
+        struct.pack_into('<I', e, 8, sidx)
         out += e
     raw = name.encode('latin-1')
     out += struct.pack('<I', len(raw)) + raw
@@ -192,8 +200,17 @@ def ttab(entry_template: bytes, entries: list[tuple[int, int, int]],
 
 
 def ttab_entry_template(donor_ttab: bytes) -> bytes:
-    """First 74-byte entry from a donor TTAB resource."""
-    return bytes(donor_ttab[64 + 14: 64 + 14 + 74])
+    """Most-typical 54-byte entry from a v0x54 donor TTAB: picks the entry
+    whose flag words are the most common pair in the table (a plain,
+    always-available menu action)."""
+    ver, = struct.unpack_from('<I', donor_ttab, 68)
+    if ver != 0x54:
+        raise ValueError(f"donor TTAB version {ver:#x}, need 0x54")
+    cnt, = struct.unpack_from('<H', donor_ttab, 76)
+    entries = [donor_ttab[78 + i * 54: 78 + (i + 1) * 54] for i in range(cnt)]
+    from collections import Counter
+    common = Counter(e[4:8] for e in entries).most_common(1)[0][0]
+    return bytes(next(e for e in entries if e[4:8] == common))
 
 
 # ---- OBJD --------------------------------------------------------------------
