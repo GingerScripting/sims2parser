@@ -4,6 +4,8 @@ struct SimDetailView: View {
     let sim: Sim
     let hood: Hood?
     var onSelect: (Sim) -> Void
+    var journalMentions: [JournalMention] = []
+    var onOpenJournal: (UUID) -> Void = { _ in }
 
     var body: some View {
         ScrollView {
@@ -12,6 +14,7 @@ struct SimDetailView: View {
                 infoGrid
                 if !sim.bio.isEmpty { bioSection }
                 familySection
+                if !journalMentions.isEmpty { journalSection }
                 traitsSection
                 relationshipsSection
                 footer
@@ -34,6 +37,7 @@ struct SimDetailView: View {
                 }
             }
             HStack(spacing: 6) {
+                if sim.isDead { badge("Deceased", color: .gray) }
                 badge(sim.age, color: .blue)
                 badge(sim.gender, color: sim.gender == "Female" ? .pink : .teal)
                 ForEach(sim.aspirations, id: \.self) { badge($0, color: .indigo) }
@@ -156,6 +160,25 @@ struct SimDetailView: View {
                 .buttonStyle(.link)
         } else {
             Text(name)
+        }
+    }
+
+    // MARK: journal
+
+    private var journalSection: some View {
+        section("Journal") {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(journalMentions) { mention in
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Button(mention.title) { onOpenJournal(mention.id) }
+                            .buttonStyle(.link)
+                            .frame(minWidth: 76, alignment: .leading)
+                        Text(mention.line)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+            }
         }
     }
 

@@ -44,6 +44,7 @@ enum TraitFilter: String, CaseIterable, Identifiable {
     case inLove = "In Love"
     case hasEnemies = "Has Enemies"
     case inFamilyBin = "In Family Bin"
+    case deceased = "Deceased"
     var id: String { rawValue }
 
     func matches(_ s: Sim) -> Bool {
@@ -56,12 +57,21 @@ enum TraitFilter: String, CaseIterable, Identifiable {
         case .inLove: return !s.loves.isEmpty
         case .hasEnemies: return !s.enemies.isEmpty
         case .inFamilyBin: return s.isInFamilyBin
+        case .deceased: return s.isDead
         }
     }
 }
 
+enum ViewMode: String, CaseIterable {
+    case sims = "Sims"
+    case journal = "Journal"
+}
+
 struct ContentView: View {
     @EnvironmentObject var store: DataStore
+    @StateObject private var journal = JournalStore()
+    @State private var mode: ViewMode = .sims
+    @State private var journalSelection: UUID?
     @State private var hoodID: String?
     @State private var search = ""
     @State private var ageFilter = "All"
@@ -90,7 +100,9 @@ struct ContentView: View {
         let q = search.lowercased()
         return hood.sims.filter { s in
             switch typeFilter {
-            case .playable: if !s.isPlayable { return false }
+            // Dead sims leave their family (family id 0), so keep them
+            // visible in the Playable view rather than vanishing on death.
+            case .playable: if !s.isPlayable && !s.isDead { return false }
             case .townies: if s.isPlayable { return false }
             case .all: break
             }
@@ -112,20 +124,35 @@ struct ContentView: View {
         // exists (measured with GeometryProbe), shifting the whole list left.
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-                searchField
-                filterBar
-                List(filteredSims, selection: $selection) { sim in
-                    SimRow(sim: sim).tag(sim)
+                modePicker
+                if mode == .sims {
+                    searchField
+                    filterBar
+                    List(filteredSims, selection: $selection) { sim in
+                        SimRow(sim: sim).tag(sim)
+                    }
+                    .listStyle(.inset)
+                    statusBar
+                } else {
+                    journalList
                 }
-                .listStyle(.inset)
-                statusBar
             }
             .frame(width: 340)
             Divider()
             Group {
-                if let sim = selectedSim {
-                    DetailHost(sim: sim, hood: hood, onSelect: { selection = [$0] })
-                        .id(sim.nid)
+                if mode == .journal {
+                    journalDetail
+                } else if let sim = selectedSim {
+                    DetailHost(
+                        sim: sim, hood: hood,
+                        onSelect: { selection = [$0] },
+                        journalMentions: journal.mentions(of: sim.fullName, hoodID: hood?.id ?? ""),
+                        onOpenJournal: { entryID in
+                            journalSelection = entryID
+                            mode = .journal
+                        }
+                    )
+                    .id(sim.nid)
                 } else if selection.count > 1 {
                     multiSelectionView
                 } else {
@@ -178,6 +205,126 @@ struct ContentView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(store.errorMessage ?? "")
+        }
+    }
+
+    private var modePicker: some View {
+        Picker("", selection: $mode) {
+            ForEach(ViewMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+    }
+
+    private var journalEntries: [JournalEntry] {
+        journal.entries(for: hood?.id ?? "")
+    }
+
+    private var journalList: some View {
+        VStack(spacing: 0) {
+            List(journalEntries, selection: $journalSelection) { entry in
+                JournalRow(entry: entry).tag(entry.id)
+            }
+            .listStyle(.inset)
+            Divider()
+            HStack {
+                Button {
+                    guard let hoodID = hood?.id else { return }
+                    let entry = journal.addEntry(hoodID: hoodID)
+                    journalSelection = entry.id
+                } label: {
+                    Label("New Entry", systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+                Spacer()
+                Text("\(journalEntries.count) entries")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+        }
+        .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private var journalDetail: some View {
+        VStack(spacing: 0) {
+            if let hoodID = hood?.id, let changes = store.detectedChanges[hoodID], !changes.isEmpty {
+                changesBanner(hoodID: hoodID, changes: changes)
+                Divider()
+            }
+            journalEditorArea
+        }
+    }
+
+    private func changesBanner(hoodID: String, changes: [String]) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(changes.count) change\(changes.count == 1 ? "" : "s") detected since the last save read")
+                    .font(.callout).fontWeight(.medium)
+                Text(changes.prefix(2).joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Button("Insert into Entry") {
+                insertChanges(hoodID: hoodID, changes: changes)
+            }
+            Button {
+                store.clearChanges(hoodID: hoodID)
+            } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Discard detected changes")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.orange.opacity(0.08))
+    }
+
+    private func insertChanges(hoodID: String, changes: [String]) {
+        // Target the selected entry, or create the next season's entry
+        let entryID: UUID
+        if let sel = journalSelection, journal.binding(hoodID: hoodID, id: sel) != nil {
+            entryID = sel
+        } else {
+            entryID = journal.addEntry(hoodID: hoodID).id
+            journalSelection = entryID
+        }
+        guard let binding = journal.binding(hoodID: hoodID, id: entryID) else { return }
+        var body = binding.wrappedValue.body
+        if !body.isEmpty && !body.hasSuffix("\n") { body += "\n" }
+        body += changes.map { "- \($0)" }.joined(separator: "\n") + "\n"
+        binding.wrappedValue.body = body
+        store.clearChanges(hoodID: hoodID)
+    }
+
+    @ViewBuilder
+    private var journalEditorArea: some View {
+        if let hoodID = hood?.id,
+           let entryID = journalSelection,
+           let binding = journal.binding(hoodID: hoodID, id: entryID) {
+            IsolatedPane {
+                JournalEditorView(entry: binding, onDelete: {
+                    journal.deleteEntry(hoodID: hoodID, id: entryID)
+                    journalSelection = nil
+                })
+            }
+            .id(entryID)
+        } else {
+            VStack(spacing: 12) {
+                Image(systemName: "book.closed")
+                    .font(.system(size: 44)).foregroundStyle(.tertiary)
+                Text("Select or create a journal entry")
+                    .font(.title3).foregroundStyle(.secondary)
+                Text("One entry per season — what happened in \(hood?.name ?? "this neighborhood") this rotation.")
+                    .font(.callout).foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -322,16 +469,23 @@ struct DetailHost: NSViewRepresentable {
     let sim: Sim
     let hood: Hood?
     var onSelect: (Sim) -> Void
+    var journalMentions: [JournalMention] = []
+    var onOpenJournal: (UUID) -> Void = { _ in }
+
+    private var detailView: SimDetailView {
+        SimDetailView(sim: sim, hood: hood, onSelect: onSelect,
+                      journalMentions: journalMentions, onOpenJournal: onOpenJournal)
+    }
 
     func makeNSView(context: Context) -> NSHostingView<SimDetailView> {
-        let v = NSHostingView(rootView: SimDetailView(sim: sim, hood: hood, onSelect: onSelect))
+        let v = NSHostingView(rootView: detailView)
         v.setContentHuggingPriority(.defaultLow, for: .horizontal)
         v.setContentHuggingPriority(.defaultLow, for: .vertical)
         return v
     }
 
     func updateNSView(_ nsView: NSHostingView<SimDetailView>, context: Context) {
-        nsView.rootView = SimDetailView(sim: sim, hood: hood, onSelect: onSelect)
+        nsView.rootView = detailView
     }
 }
 
@@ -357,6 +511,7 @@ struct SimRow: View {
         var parts: [String] = []
         if !sim.household.isEmpty { parts.append("\(sim.household) household") }
         if !sim.careerDisplay.isEmpty { parts.append(sim.careerDisplay) }
+        if sim.isDead { parts.insert("Deceased", at: 0) }
         if parts.isEmpty && sim.isNPC { parts.append("NPC") }
         return parts.joined(separator: " · ")
     }
