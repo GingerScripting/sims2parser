@@ -80,6 +80,7 @@ struct ContentView: View {
     @State private var aspirationFilter = "All"
     @State private var traitFilters = Set<TraitFilter>()
     @State private var selection = Set<Sim>()
+    @State private var showRandomizer = false
 
     private var activeExtraFilterCount: Int {
         traitFilters.count
@@ -172,6 +173,17 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.menu)
+            }
+            ToolbarItem {
+                Button {
+                    showRandomizer.toggle()
+                } label: {
+                    Label("Randomizer", systemImage: "dice")
+                }
+                .help("Roll a random event idea")
+                .popover(isPresented: $showRandomizer, arrowEdge: .bottom) {
+                    RandomizerView()
+                }
             }
             ToolbarItem {
                 Menu {
