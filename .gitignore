@@ -7,3 +7,7 @@ Sim Browser.app/
 SimBrowser/.swiftpm/
 quarantine/
 *.package
+# Local reference material — never committed
+game-guides/
+icons/
+teen_randomizer.sh
