@@ -400,21 +400,36 @@ def extract_hood(nbr_dir: Path) -> dict | None:
 
     # Family ties. Tie types 0/1 are the two parents in arbitrary order,
     # so assign mother/father by each parent's own gender.
+    #
+    # Ties are emitted twice: as display names (`mother`, `siblings`, …) and as
+    # the underlying sim ids (`mother_nid`, `sibling_nids`, …). Names are not a
+    # usable join key — a hood routinely holds several sims with identical full
+    # names (townies, NPCs, repeated premades), so anything that has to walk the
+    # graph rather than just print it must go through the ids.
     for nid, s in sims.items():
         ties = famt.get(nid, [])
         parents = [t for ty, t in ties if ty in (TIE_FATHER, TIE_MOTHER)]
         mother = father = ""
+        mother_nid = father_nid = None
         for p in parents:
             pname = name_of.get(p, f"[{p}]")
             if sims.get(p, {}).get("gender") == "Female":
-                mother = mother or pname
+                if not mother:
+                    mother, mother_nid = pname, p
             else:
-                father = father or pname
+                if not father:
+                    father, father_nid = pname, p
+        spouse_nid = next((t for ty, t in ties if ty == TIE_SPOUSE), None)
         s["father"] = father
         s["mother"] = mother
-        s["spouse"] = next((name_of.get(t, f"[{t}]") for ty, t in ties if ty == TIE_SPOUSE), "")
+        s["spouse"] = name_of.get(spouse_nid, f"[{spouse_nid}]") if spouse_nid is not None else ""
         s["siblings"] = [name_of.get(t, f"[{t}]") for ty, t in ties if ty == TIE_SIBLING]
         s["children"] = [name_of.get(t, f"[{t}]") for ty, t in ties if ty == TIE_CHILD]
+        s["father_nid"] = father_nid
+        s["mother_nid"] = mother_nid
+        s["spouse_nid"] = spouse_nid
+        s["sibling_nids"] = [t for ty, t in ties if ty == TIE_SIBLING]
+        s["children_nids"] = [t for ty, t in ties if ty == TIE_CHILD]
 
     # Relationships (outgoing, keep meaningful ones)
     for nid, s in sims.items():
