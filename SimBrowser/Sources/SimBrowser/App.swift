@@ -16,7 +16,11 @@ struct SimBrowserApp: App {
         WindowGroup("Sim Browser") {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 1000, minHeight: 640)
+                // 340 sidebar + 1 divider + 760 detail minimum. The detail pane
+                // cannot compress below 760 (its three-column traits row), so a
+                // narrower window makes the whole HStack overflow and centre —
+                // sliding the sim's name left, out over the sidebar divider.
+                .frame(minWidth: 1101, minHeight: 640)
         }
         .commands {
             CommandGroup(after: .newItem) {
