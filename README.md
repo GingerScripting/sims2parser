@@ -36,6 +36,13 @@ app never writes a single byte to your saves.
   has enemies, deceased.
 - **CSV export** — entire neighborhood, the currently filtered list, or just
   the selected sims, in a spreadsheet-friendly column layout.
+- **Randomizer** (the dice in the toolbar) — two rollers. *Event* draws a
+  gameplay prompt from your planning spreadsheet, falling back to a built-in
+  list. *New Teen* rolls what the game asks for when a child grows up: one of
+  the six Aspirations, two Turn Ons and a Turn Off, never repeating a trait
+  across the three slots. Each slot has its own re-roll so you can keep the
+  parts you like. The 33 traits are transcribed from the printed guides —
+  19 from Nightlife ch. 4, 14 more from Bon Voyage ch. 1 — not from memory.
 
 ### The journal
 

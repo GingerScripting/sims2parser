@@ -98,7 +98,34 @@ enum RandomEvents {
     ]
 }
 
+enum RollerMode: String, CaseIterable, Identifiable {
+    case event = "Event"
+    case newTeen = "New Teen"
+    var id: String { rawValue }
+}
+
 struct RandomizerView: View {
+    @State private var mode: RollerMode = .event
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Picker("", selection: $mode) {
+                ForEach(RollerMode.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            switch mode {
+            case .event:   EventRollerView()
+            case .newTeen: AttractionRollerView()
+            }
+        }
+        .padding(16)
+        .frame(width: 380)
+    }
+}
+
+struct EventRollerView: View {
     @State private var table = RandomEvents.load()
     @State private var rollNumber: Int?
     @State private var dieFace = 5
@@ -111,7 +138,9 @@ struct RandomizerView: View {
                 .kerning(0.5)
 
             VStack(alignment: .leading, spacing: 10) {
-                if let n = rollNumber {
+                // Index-checked: the table is reloaded from the CSV on every
+                // appearance, so a shorter list can strand an older roll number.
+                if let n = rollNumber, table.events.indices.contains(n) {
                     Text(table.events[n])
                         .font(.title3).fontWeight(.medium)
                         .fixedSize(horizontal: false, vertical: true)
@@ -148,9 +177,10 @@ struct RandomizerView: View {
                                                 : "Export “Random Events” from Numbers to \(RandomEvents.csvPath) to use your latest list")
             }
         }
-        .padding(16)
-        .frame(width: 340)
-        .onAppear { table = RandomEvents.load() }
+        .onAppear {
+            table = RandomEvents.load()
+            if let n = rollNumber, !table.events.indices.contains(n) { rollNumber = nil }
+        }
     }
 
     private func roll() {
