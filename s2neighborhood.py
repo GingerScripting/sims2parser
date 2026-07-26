@@ -404,8 +404,8 @@ def extract_hood(nbr_dir: Path) -> dict | None:
     # Ties are emitted twice: as display names (`mother`, `siblings`, …) and as
     # the underlying sim ids (`mother_nid`, `sibling_nids`, …). Names are not a
     # usable join key — a hood routinely holds several sims with identical full
-    # names (townies, NPCs, repeated premades), so anything that walks the graph
-    # rather than just printing it must go through the ids.
+    # names (townies, NPCs, repeated premades), so anything that has to walk the
+    # graph rather than just print it must go through the ids.
     for nid, s in sims.items():
         ties = famt.get(nid, [])
         parents = [t for ty, t in ties if ty in (TIE_FATHER, TIE_MOTHER)]
