@@ -21,6 +21,12 @@ app never writes a single byte to your saves.
 - **Family & relationships** — parents, spouse, siblings, and children as
   clickable links, plus every meaningful relationship with daily/lifetime
   scores and flags (love, married, best friends, enemies, BFF).
+- **Family tree** — an hourglass chart five generations tall: grandparents,
+  parents, the sim with their siblings and spouses, children, grandchildren.
+  Couples are joined solid pink when the save records a marriage and dashed
+  when they only share children (divorced, widowed, or abducted by aliens —
+  hello, Bella). Click any box to re-centre the tree on that sim, which walks
+  the whole hood one relative at a time.
 - **Personality, skills, and interests** as SimPE-style meters.
 - **Life-state awareness** — Young Adults at university, unplaced sims in the
   Family Bin, and the dearly departed (deaths are detected from ghost flags)
@@ -96,6 +102,14 @@ travelers:
 - Character-file slot numbers are **not** neighborhood sim ids; join
   character packages to SDSC records via the OBJD GUID at `0x5C` ↔ SDSC GUID
   at `0x1A6`.
+- Sim **names are not unique** — every hood here has 9–12 duplicated full
+  names (townies, NPCs, repeated premades). Anything that walks the family
+  graph rather than just printing it has to join on tie ids, which is why
+  `s2neighborhood.py` emits both `mother`/`siblings`/… and
+  `mother_nid`/`sibling_nids`/….
+- FAMt sibling lists can include **in-laws**, recorded one-way: Annabelle
+  Goldstein lists her brother's wife as a sibling, while the wife lists no
+  siblings back. A tree builder that trusts both directions draws her twice.
 - CTSS text entries are (language, value, description) triples; parse all
   three or in-game-born sims lose their last names.
 

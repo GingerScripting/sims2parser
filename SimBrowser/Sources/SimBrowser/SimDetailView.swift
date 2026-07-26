@@ -6,6 +6,7 @@ struct SimDetailView: View {
     var onSelect: (Sim) -> Void
     var journalMentions: [JournalMention] = []
     var onOpenJournal: (UUID) -> Void = { _ in }
+    var onShowFamilyTree: () -> Void = {}
 
     var body: some View {
         ScrollView {
@@ -125,17 +126,29 @@ struct SimDetailView: View {
 
     // MARK: family
 
+    private var hasFamilyTies: Bool {
+        !(sim.mother.isEmpty && sim.father.isEmpty && sim.spouse.isEmpty
+          && sim.siblings.isEmpty && sim.children.isEmpty)
+    }
+
     private var familySection: some View {
         section("Family") {
-            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 6) {
-                if !sim.mother.isEmpty { linkRow("Mother", [sim.mother]) }
-                if !sim.father.isEmpty { linkRow("Father", [sim.father]) }
-                if !sim.spouse.isEmpty { linkRow("Spouse", [sim.spouse]) }
-                if !sim.siblings.isEmpty { linkRow("Siblings", sim.siblings) }
-                if !sim.children.isEmpty { linkRow("Children", sim.children) }
-                if sim.mother.isEmpty && sim.father.isEmpty && sim.spouse.isEmpty
-                    && sim.siblings.isEmpty && sim.children.isEmpty {
-                    GridRow { Text("No recorded family ties").foregroundStyle(.tertiary) }
+            VStack(alignment: .leading, spacing: 12) {
+                Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 6) {
+                    if !sim.mother.isEmpty { linkRow("Mother", [sim.mother]) }
+                    if !sim.father.isEmpty { linkRow("Father", [sim.father]) }
+                    if !sim.spouse.isEmpty { linkRow("Spouse", [sim.spouse]) }
+                    if !sim.siblings.isEmpty { linkRow("Siblings", sim.siblings) }
+                    if !sim.children.isEmpty { linkRow("Children", sim.children) }
+                    if !hasFamilyTies {
+                        GridRow { Text("No recorded family ties").foregroundStyle(.tertiary) }
+                    }
+                }
+                if hasFamilyTies {
+                    Button(action: onShowFamilyTree) {
+                        Label("View family tree", systemImage: "person.2.crop.square.stack")
+                    }
+                    .controlSize(.small)
                 }
             }
         }

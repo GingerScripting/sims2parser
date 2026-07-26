@@ -81,6 +81,9 @@ struct ContentView: View {
     @State private var traitFilters = Set<TraitFilter>()
     @State private var selection = Set<Sim>()
     @State private var showRandomizer = false
+    /// Non-nil while the family tree sheet is up. Presented from here rather
+    /// than from SimDetailView, which lives inside its own NSHostingView.
+    @State private var treeSim: Sim?
 
     private var activeExtraFilterCount: Int {
         traitFilters.count
@@ -151,7 +154,8 @@ struct ContentView: View {
                         onOpenJournal: { entryID in
                             journalSelection = entryID
                             mode = .journal
-                        }
+                        },
+                        onShowFamilyTree: { treeSim = sim }
                     )
                     .id(sim.nid)
                 } else if selection.count > 1 {
@@ -209,6 +213,15 @@ struct ContentView: View {
         .onAppear {
             store.loadCachedOrRefresh()
             GeometryProbe.startIfRequested()
+        }
+        .sheet(item: $treeSim) { sim in
+            if let hood {
+                FamilyTreeView(
+                    root: sim, hood: hood,
+                    onSelect: { selection = [$0] },
+                    onClose: { treeSim = nil }
+                )
+            }
         }
         .alert("Problem loading data", isPresented: Binding(
             get: { store.errorMessage != nil },
@@ -483,10 +496,12 @@ struct DetailHost: NSViewRepresentable {
     var onSelect: (Sim) -> Void
     var journalMentions: [JournalMention] = []
     var onOpenJournal: (UUID) -> Void = { _ in }
+    var onShowFamilyTree: () -> Void = {}
 
     private var detailView: SimDetailView {
         SimDetailView(sim: sim, hood: hood, onSelect: onSelect,
-                      journalMentions: journalMentions, onOpenJournal: onOpenJournal)
+                      journalMentions: journalMentions, onOpenJournal: onOpenJournal,
+                      onShowFamilyTree: onShowFamilyTree)
     }
 
     func makeNSView(context: Context) -> NSHostingView<SimDetailView> {
@@ -527,15 +542,5 @@ struct SimRow: View {
         if parts.isEmpty && sim.isNPC { parts.append("NPC") }
         return parts.joined(separator: " · ")
     }
-    private var ageColor: Color {
-        switch sim.age {
-        case "Baby", "Toddler": return .pink
-        case "Child": return .orange
-        case "Teen": return .yellow
-        case "Young Adult": return .green
-        case "Adult": return .blue
-        case "Elder": return .purple
-        default: return .gray
-        }
-    }
+    private var ageColor: Color { sim.ageColor }
 }
