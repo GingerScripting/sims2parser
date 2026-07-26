@@ -78,6 +78,13 @@ struct Sim: Decodable, Identifiable, Hashable {
     var spouse: String
     var siblings: [String]
     var children: [String]
+    // Tie ids. Optional so a sims.json cached by an older build still decodes;
+    // the family tree needs ids because full names are not unique within a hood.
+    var fatherNid: Int?
+    var motherNid: Int?
+    var spouseNid: Int?
+    var siblingNids: [Int]?
+    var childrenNids: [Int]?
     var relationships: [Relationship]
     var orientation: String
     var loves: [String]
