@@ -36,6 +36,10 @@ OBJD: 64B filename + 108 u16 fields + u32 name-len + name.
   words 70/71 original (clone source) GUID.
 """
 
+# Annotations stay strings so the modules import under the system
+# python3 (3.9), which the app gets when launched from Finder.
+from __future__ import annotations
+
 import struct
 
 # ---- SimAntics constants ---------------------------------------------------

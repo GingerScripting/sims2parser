@@ -85,6 +85,7 @@ struct ContentView: View {
     @State private var traitFilters = Set<TraitFilter>()
     @State private var selection = Set<Sim>()
     @State private var showRandomizer = false
+    @State private var showChangeReview = false
     /// Non-nil while the family tree sheet is up. Presented from here rather
     /// than from SimDetailView, which lives inside its own NSHostingView.
     @State private var treeSim: Sim?
@@ -177,7 +178,12 @@ struct ContentView: View {
                     set: { hoodID = $0; selection = [] }
                 )) {
                     ForEach(store.hoods) { h in
-                        Text("\(h.name) (\(h.id))").tag(h.id)
+                        // Rotational play spans hoods, so a refresh has to say
+                        // which of the others have something waiting.
+                        let pending = store.detectedChanges[h.id]?.count ?? 0
+                        Text(pending > 0 ? "\(h.name) (\(h.id)) — \(pending) new"
+                                         : "\(h.name) (\(h.id))")
+                            .tag(h.id)
                     }
                 }
                 .pickerStyle(.menu)
@@ -218,6 +224,18 @@ struct ContentView: View {
             store.loadCachedOrRefresh()
             GeometryProbe.startIfRequested()
         }
+        .sheet(isPresented: $showChangeReview) {
+            if let hood, let changes = store.detectedChanges[hood.id], !changes.isEmpty {
+                ChangeReviewView(
+                    hoodName: hood.name, changes: changes,
+                    entries: journalEntries,
+                    selectedEntry: journalSelection,
+                    newEntryTitle: journal.suggestedTitle(for: hood.id),
+                    onInsert: { insertChanges(hoodID: hood.id, changes: $0, into: $1) },
+                    onCancel: { showChangeReview = false }
+                )
+            }
+        }
         .sheet(item: $treeSim) { sim in
             if let hood {
                 FamilyTreeView(
@@ -238,8 +256,14 @@ struct ContentView: View {
     }
 
     private var modePicker: some View {
-        Picker("", selection: $mode) {
-            ForEach(ViewMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        // A pending-change count on the Journal tab, so a refresh made from the
+        // Sims list still announces that there is something to write up.
+        let pending = store.detectedChanges[hood?.id ?? ""]?.count ?? 0
+        return Picker("", selection: $mode) {
+            ForEach(ViewMode.allCases, id: \.self) { m in
+                Text(m == .journal && pending > 0 ? "\(m.rawValue) (\(pending))" : m.rawValue)
+                    .tag(m)
+            }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -288,19 +312,24 @@ struct ContentView: View {
         }
     }
 
-    private func changesBanner(hoodID: String, changes: [String]) -> some View {
-        HStack(spacing: 10) {
+    private func changesBanner(hoodID: String, changes: [Change]) -> some View {
+        let households = ChangeDigest.grouped(changes).count
+        return HStack(spacing: 10) {
             Image(systemName: "sparkles")
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 1) {
-                Text("\(changes.count) change\(changes.count == 1 ? "" : "s") detected since the last save read")
+                Text("\(changes.count) change\(changes.count == 1 ? "" : "s") detected across \(households) household\(households == 1 ? "" : "s")")
                     .font(.callout).fontWeight(.medium)
-                Text(changes.prefix(2).joined(separator: " · "))
+                Text(changes.prefix(2).map(\.text).joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-            Button("Insert into Entry") {
-                insertChanges(hoodID: hoodID, changes: changes)
+            Button("Review…") { showChangeReview = true }
+            // Names its target: the entry on screen is not always the season
+            // that was just played, and silently guessing put a whole rotation
+            // in the wrong season once already.
+            Button("Add All to \(insertTargetTitle)") {
+                insertChanges(hoodID: hoodID, changes: changes, into: journalSelection)
             }
             Button {
                 store.clearChanges(hoodID: hoodID)
@@ -315,21 +344,34 @@ struct ContentView: View {
         .background(.orange.opacity(0.08))
     }
 
-    private func insertChanges(hoodID: String, changes: [String]) {
-        // Target the selected entry, or create the next season's entry
+    /// Title of the entry a one-click "Add All" would write into.
+    private var insertTargetTitle: String {
+        if let sel = journalSelection, let entry = journalEntries.first(where: { $0.id == sel }) {
+            return entry.title
+        }
+        return journal.suggestedTitle(for: hood?.id ?? "")
+    }
+
+    /// `destination` nil means "start a new entry for the next season".
+    private func insertChanges(hoodID: String, changes: [Change], into destination: UUID?) {
+        guard !changes.isEmpty else { return }
         let entryID: UUID
-        if let sel = journalSelection, journal.binding(hoodID: hoodID, id: sel) != nil {
-            entryID = sel
+        if let destination, journal.binding(hoodID: hoodID, id: destination) != nil {
+            entryID = destination
         } else {
             entryID = journal.addEntry(hoodID: hoodID).id
-            journalSelection = entryID
         }
+        journalSelection = entryID
         guard let binding = journal.binding(hoodID: hoodID, id: entryID) else { return }
         var body = binding.wrappedValue.body
-        if !body.isEmpty && !body.hasSuffix("\n") { body += "\n" }
-        body += changes.map { "- \($0)" }.joined(separator: "\n") + "\n"
+        if !body.isEmpty && !body.hasSuffix("\n\n") {
+            body += body.hasSuffix("\n") ? "\n" : "\n\n"
+        }
+        body += ChangeDigest.journalText(changes) + "\n"
         binding.wrappedValue.body = body
-        store.clearChanges(hoodID: hoodID)
+        store.clearChanges(hoodID: hoodID, ids: Set(changes.map { $0.id }))
+        showChangeReview = false
+        mode = .journal
     }
 
     @ViewBuilder
