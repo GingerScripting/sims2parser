@@ -52,11 +52,44 @@ A per-neighborhood play journal with one entry per season ("01 Spring",
 ![Journal with detected changes](docs/journal.png)
 
 The killer feature: hit **⌘R** after a play session and the app **diffs your
-saves against the last read** and drafts the entry for you — marriages,
-births, deaths, age-ups, going off to college, promotions, moves, new loves,
-new enemies. One click inserts them as bullets you can edit. And any sim
-mentioned by name in an entry gets a **Journal** section on their detail page
-linking back to every season they appear in: write hood-wide, read per-sim.
+saves against the last read** and drafts the entry for you. What it catches:
+
+| | |
+|---|---|
+| **Life stages** | births (with both parents named), age-ups, deaths, adoptions |
+| **Romance** | marriages, engagements and called-off engagements, going steady, new crushes, falling in and out of love, divorces |
+| **Career** | first jobs, promotions, demotions, career changes, retirements |
+| **University** | leaving for college, semesters, declared majors, graduating, coming home |
+| **Skills** | points gained per skill, and maxing one out |
+| **Social** | new and lost best friends, new feuds, and enemies patching things up |
+| **Household** | moving lot, moving in together, family-bin moves, new and dissolved households, money earned or spent |
+| **Other** | aspirations taken up, personality shifts, noticeable weight changes |
+
+Because rotational play goes household by household, the draft is **grouped by
+family** rather than dumped as one flat list, biggest events first:
+
+```
+The Goth household
+- Cassandra Goth got engaged to Don Lothario
+- Mortimer Goth was promoted to Chief Executive Officer
+- Alexander Goth gained skill points: Logic +3, Cleaning +1
+
+The Pleasant household
+- Daniel Pleasant and Mary-Sue Pleasant called off their engagement
+- The Pleasant household earned §14,200 (now §51,908)
+```
+
+**Review…** opens a checklist of everything found, grouped the same way, so a
+season's real story goes in and the noise stays out; **Add All** skips the
+checklist. Anything left unticked stays pending for next time. Both the Journal
+tab and the neighborhood menu show a count of what is waiting, so a hood you
+haven't rotated to yet still announces itself.
+
+Reciprocal events are reported once, not twice — a marriage is one line, not
+one per spouse — and a whole household relocating is one line rather than one
+per member. Any sim mentioned by name in an entry gets a **Journal** section on
+their detail page linking back to every season they appear in: write hood-wide,
+read per-sim.
 
 ## Install & run
 

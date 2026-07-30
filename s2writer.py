@@ -5,6 +5,10 @@ Companion to s2parser.py. All resources are written uncompressed (the game
 accepts this), so no DIR/CLST record is emitted.
 """
 
+# Annotations stay strings so the modules import under the system
+# python3 (3.9), which the app gets when launched from Finder.
+from __future__ import annotations
+
 import struct
 import sys
 from dataclasses import dataclass, field

@@ -12,6 +12,10 @@ Reads the same save files SimPE does:
 Field offsets verified empirically against this save and simswiki.info/wiki.php?title=SDSC.
 """
 
+# Annotations stay strings so the modules import under the system
+# python3 (3.9), which the app gets when launched from Finder.
+from __future__ import annotations
+
 import argparse
 import json
 import struct

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Sims 2 .package file parser — header, resource index, and BHAV decoding."""
 
+# Annotations stay strings so the modules import under the system
+# python3 (3.9), which the app gets when launched from Finder.
+from __future__ import annotations
+
 import struct
 import sys
 from dataclasses import dataclass
