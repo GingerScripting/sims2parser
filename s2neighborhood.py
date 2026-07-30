@@ -8,6 +8,7 @@ Reads the same save files SimPE does:
   FAMt 0x8C870743  family ties (parents/spouse/siblings/children)
   SREL 0xCC364C2A  pairwise relationships (scores + flags)
   CTSS 0x43545353  neighborhood + per-sim text (names, bios)
+  NGBH 0x4E474248  token store: owned businesses, talent badges (see s2ngbh.py)
 
 Field offsets verified empirically against this save and simswiki.info/wiki.php?title=SDSC.
 """
@@ -23,6 +24,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import s2ngbh
 from s2parser import open_package, read_resource
 
 TID_SDSC = 0xAACE2EFB
@@ -32,6 +34,7 @@ TID_FAMT = 0x8C870743
 TID_SREL = 0xCC364C2A
 TID_CTSS = 0x43545353
 TID_OBJD = 0x4F424A44
+TID_NGBH = s2ngbh.TID_NGBH
 
 DEFAULT_ROOT = (
     Path.home()
@@ -234,7 +237,31 @@ def orientation(sim: dict) -> str:
 # FAMI / LTXT
 # ---------------------------------------------------------------------------
 
-def parse_ltxt(d: bytes) -> dict:
+def ltxt_owner(d: bytes, instance: int) -> int:
+    """Sim id that owns this lot, or 0 if nobody does.
+
+    Every owned lot — an Open for Business community lot or a home business —
+    records its owner in the last word of the LTXT, past the lot texture name.
+    The variable-length height map in front of that makes a straight walk
+    fragile, so anchor on the lot instance id, which the record echoes just
+    before the texture name. Older records stop at the name and have no owner.
+    """
+    if not instance:
+        return 0
+    want = struct.pack("<I", instance)
+    pos = d.find(want, 0x17)
+    while pos >= 0:
+        p = pos + 5                       # instance id + one flag byte
+        n = u32(d, p)
+        end = p + 4 + n
+        if 0 < n < 200 and end + 1 <= len(d):
+            if all(32 <= c < 127 for c in d[p + 4:end]):
+                return u32(d, end + 1) if end + 5 <= len(d) else 0
+        pos = d.find(want, pos + 1)
+    return 0
+
+
+def parse_ltxt(d: bytes, instance: int = 0) -> dict:
     n = u32(d, 0x13)
     name = d[0x17:0x17 + n].decode('latin-1', 'replace') if 0 < n < 200 else ""
     desc = ""
@@ -242,7 +269,7 @@ def parse_ltxt(d: bytes) -> dict:
     dn = u32(d, dpos)
     if 0 < dn < 2000 and dpos + 4 + dn <= len(d):
         desc = d[dpos + 4:dpos + 4 + dn].decode('latin-1', 'replace')
-    return {"name": name, "description": desc}
+    return {"name": name, "description": desc, "owner": ltxt_owner(d, instance)}
 
 
 def parse_fami(d: bytes, iid: int, sim_guids: set[int]) -> dict:
@@ -325,6 +352,50 @@ def load_srel(pkg_path: Path, entries) -> dict[int, list[dict]]:
 
 
 # ---------------------------------------------------------------------------
+# Businesses (Open for Business)
+# ---------------------------------------------------------------------------
+
+def collect_businesses(lots: dict, sims: dict, families: dict,
+                       ngbh: dict) -> list[dict]:
+    """Every owned lot in the hood, from the two places the game records them.
+
+    The LTXT owner word is the authoritative list of *which* lots are owned —
+    home businesses included — but carries nothing else. Rank and customer
+    loyalty come from the household's `Token - Remote Business Data`, which
+    only exists for a business run away from home and only once it has been
+    opened for the first time. So a home business is reported with a null
+    rank rather than left out: the game keeps its rank in the lot's own
+    package, alongside the rest of the lot's object state.
+    """
+    ranked = {}
+    for fid, records in s2ngbh.households_businesses(ngbh).items():
+        for record in records:
+            ranked[record["lot"]] = dict(record, owner_family_id=fid)
+
+    owned = {lot_id for lot_id, lot in lots.items() if lot.get("owner")}
+    out = []
+    for lot_id in sorted(owned | set(ranked)):
+        lot = lots.get(lot_id, {})
+        owner_nid = lot.get("owner", 0)
+        owner = sims.get(owner_nid, {})
+        family_id = owner.get("family_id", ranked.get(lot_id, {}).get("owner_family_id"))
+        family = families.get(family_id, {})
+        rank = ranked.get(lot_id)
+        out.append({
+            "lot": lot_id,
+            "name": lot.get("name", ""),
+            "owner_nid": owner_nid,
+            "owner": f'{owner.get("first", "")} {owner.get("last", "")}'.strip(),
+            "owner_family_id": family_id,
+            "owner_household": family.get("name", ""),
+            "home_business": bool(owner_nid) and family.get("lot") == lot_id,
+            "rank": rank["rank"] if rank else None,
+            "customer_loyalty": rank["customer_loyalty"] if rank else None,
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Hood extraction
 # ---------------------------------------------------------------------------
 
@@ -340,8 +411,28 @@ def extract_hood(nbr_dir: Path) -> dict | None:
     hood_name = hood_id
     sims: dict[int, dict] = {}
     families: dict[int, dict] = {}
-    lots: dict[int, dict] = {}
     famt: dict[int, list] = {}
+    ngbh: dict[str, dict] = {"lots": {}, "families": {}, "sims": {}}
+
+    # Lots come from every package in the folder, not just the neighborhood
+    # one: sub-hood lots (downtown, university, vacation, and the Bluewater
+    # businesses) live in their own Nxxx_Suburb/Downtown packages. Lot
+    # instance ids are unique across the whole hood, so one flat map is safe.
+    lots: dict[int, dict] = {}
+    for pkg in sorted(nbr_dir.glob(f"{hood_id}_*.package")):
+        try:
+            _, lot_entries = open_package(pkg)
+        except Exception:
+            continue
+        with open(pkg, "rb") as f:
+            for e in lot_entries:
+                if e.type_id != TID_LTXT:
+                    continue
+                try:
+                    lots[e.instance_id2] = parse_ltxt(read_resource(f, e),
+                                                      e.instance_id2)
+                except Exception:
+                    continue
 
     sim_guids = set(chars.keys())
 
@@ -362,9 +453,8 @@ def extract_hood(nbr_dir: Path) -> dict | None:
                     if s["age"] == "?0" and not s["char_file"]:
                         continue
                     sims[s["nid"]] = s
-                elif e.type_id == TID_LTXT:
-                    d = read_resource(f, e)
-                    lots[e.instance_id2] = parse_ltxt(d)
+                elif e.type_id == TID_NGBH:
+                    ngbh = s2ngbh.parse_ngbh(read_resource(f, e))
                 elif e.type_id == TID_FAMT:
                     famt = parse_famt(read_resource(f, e))
                 elif e.type_id == TID_CTSS and e.instance_id2 == 1:
@@ -399,6 +489,13 @@ def extract_hood(nbr_dir: Path) -> dict | None:
             sims[n]["household"] = fam["name"]
             sims[n]["address"] = fam["address"]
             sims[n]["funds"] = fam["funds"]
+
+    businesses = collect_businesses(lots, sims, families, ngbh)
+    for fam in families.values():
+        fam["businesses"] = [b for b in businesses
+                             if b["owner_family_id"] == fam["id"]]
+        for n in fam["member_nids"]:
+            sims[n]["businesses"] = [b["name"] for b in fam["businesses"]]
 
     name_of = {nid: f'{s["first"]} {s["last"]}'.strip() or f"[{nid}]" for nid, s in sims.items()}
 
@@ -450,16 +547,21 @@ def extract_hood(nbr_dir: Path) -> dict | None:
         s["best_friends"] = [r["name"] for r in out if "Best Friend" in r["flags"] or r["bff"]]
         s["enemies"] = [r["name"] for r in out if "Enemy" in r["flags"]]
 
-    for s in sims.values():
+    badges = s2ngbh.sim_badges(ngbh)
+    for nid, s in sims.items():
         s.setdefault("household", "")
         s.setdefault("address", "")
         s.setdefault("funds", 0)
+        s.setdefault("businesses", [])
+        s["badges"] = badges.get(nid, {})
 
     return {
         "id": hood_id,
         "name": hood_name,
         "sims": sorted(sims.values(), key=lambda s: (s["last"] or "~", s["first"])),
         "families": list(families.values()),
+        "businesses": sorted(businesses,
+                             key=lambda b: (-(b["rank"] or 0), b["name"])),
     }
 
 
