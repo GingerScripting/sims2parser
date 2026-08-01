@@ -55,11 +55,12 @@ so walking a bloodline is a series of clicks.
 
 ### Family tree
 
-![Family tree centred on Ferdinand Terrano, five generations of Grunts](docs/tree.png)
+![Family tree centred on Ferdinand Terrano, three generations of the Grunt line](docs/tree.png)
 
-Strangetown's Grunt–Terrano tangle, which is exactly the case that makes this
-hard: every couple here is joined by a **dashed** line, meaning the save records
-shared children but no marriage. Solid pink means the game recorded a wedding.
+Strangetown's Grunt–Terrano line, centred on Ferdinand. Both couples here are
+joined by a **dashed** line rather than solid pink — the save ties them together
+through shared children with no current marriage on record, which is equally how
+a divorced or widowed pair comes out (Buzz and Lyla are both dead, marked †).
 Click any box to re-centre the tree on that sim and keep walking.
 
 ### Search and filters
