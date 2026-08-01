@@ -244,3 +244,8 @@ Format documentation by the modding community at
 [Pick'N'Mix Mods](https://www.picknmixmods.com). Sample packages by
 Christianlov, TwoJeffs, and others, used for format reference. Built with
 [Claude Code](https://claude.com/claude-code).
+
+## License
+
+[MIT](LICENSE). The Sims 2 is a trademark of Electronic Arts; this project is
+an unaffiliated, read-only reader of its save files and ships no game assets.
