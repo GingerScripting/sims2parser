@@ -24,6 +24,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import s2luastate
 import s2ngbh
 from s2parser import open_package, read_resource
 
@@ -33,8 +34,10 @@ TID_LTXT = 0x0BF999E7
 TID_FAMT = 0x8C870743
 TID_SREL = 0xCC364C2A
 TID_CTSS = 0x43545353
+TID_STR = 0x53545223
 TID_OBJD = 0x4F424A44
 TID_NGBH = s2ngbh.TID_NGBH
+TID_LUA_STATE = s2luastate.TID_LUA_STATE
 
 DEFAULT_ROOT = (
     Path.home()
@@ -413,6 +416,8 @@ def extract_hood(nbr_dir: Path) -> dict | None:
     families: dict[int, dict] = {}
     famt: dict[int, list] = {}
     ngbh: dict[str, dict] = {"lots": {}, "families": {}, "sims": {}}
+    household_names: dict[int, str] = {}
+    lua_state: dict[int, list] = {}
 
     # Lots come from every package in the folder, not just the neighborhood
     # one: sub-hood lots (downtown, university, vacation, and the Bluewater
@@ -455,8 +460,21 @@ def extract_hood(nbr_dir: Path) -> dict | None:
                     sims[s["nid"]] = s
                 elif e.type_id == TID_NGBH:
                     ngbh = s2ngbh.parse_ngbh(read_resource(f, e))
+                elif e.type_id == TID_LUA_STATE:
+                    # Script-side state, one resource per table per sim; the
+                    # sim's nid is the high half of the instance id.
+                    table = s2luastate.parse_state_table(read_resource(f, e))
+                    lua_state.setdefault(e.instance_id2, []).append(table)
                 elif e.type_id == TID_FAMT:
                     famt = parse_famt(read_resource(f, e))
+                elif e.type_id == TID_STR and e.group_id == 0xFFFFFFFF:
+                    # Household name, keyed by family id. This is the name the
+                    # game shows; deriving one from surnames gets it wrong for
+                    # about a third of households — mixed-surname families, and
+                    # every Greek house and dorm ("Tri-Var Sorority").
+                    strs = parse_ctss_strings(read_resource(f, e))
+                    if strs and strs[0]:
+                        household_names[e.instance_id2] = strs[0]
                 elif e.type_id == TID_CTSS and e.instance_id2 == 1:
                     strs = parse_ctss_strings(read_resource(f, e))
                     if strs and strs[0]:
@@ -482,7 +500,8 @@ def extract_hood(nbr_dir: Path) -> dict | None:
         member_nids = [guid_to_nid[g] for g in fam["members"] if g in guid_to_nid]
         fam["member_nids"] = member_nids
         lastnames = Counter(sims[n]["last"] for n in member_nids if sims[n]["last"])
-        fam["name"] = lastnames.most_common(1)[0][0] if lastnames else f"Family {fid}"
+        derived = lastnames.most_common(1)[0][0] if lastnames else f"Family {fid}"
+        fam["name"] = household_names.get(fid) or derived
         lot = lots.get(fam["lot"])
         fam["address"] = lot["name"] if lot else ""
         for n in member_nids:
@@ -548,12 +567,14 @@ def extract_hood(nbr_dir: Path) -> dict | None:
         s["enemies"] = [r["name"] for r in out if "Enemy" in r["flags"]]
 
     badges = s2ngbh.sim_badges(ngbh)
+    perks = s2luastate.sim_business_perks(lua_state)
     for nid, s in sims.items():
         s.setdefault("household", "")
         s.setdefault("address", "")
         s.setdefault("funds", 0)
         s.setdefault("businesses", [])
         s["badges"] = badges.get(nid, {})
+        s["perks"] = perks.get(nid, {"points": 0, "perks": {}})
 
     return {
         "id": hood_id,

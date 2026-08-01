@@ -11,6 +11,8 @@ from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import NamedTuple
 
+import s2luastate
+from s2neighborhood import TID_SDSC, parse_sdsc
 from s2parser import open_package, read_resource
 
 # ---------------------------------------------------------------------------
@@ -38,6 +40,7 @@ class SimInfo:
     char_file: Path
     neighborhood: str
     slot: int = 0
+    guid: int = 0
     first_name: str = ""
     last_name: str = ""
     bio: str = ""
@@ -46,6 +49,12 @@ class SimInfo:
     gender: str = ""
     fitness: int = 0
     relationships: list = field(default_factory=list)  # list[Relationship]
+    perk_points: int = 0
+    perks: dict = field(default_factory=dict)  # track → [display name, tier 1 first]
+
+    @property
+    def perk_count(self) -> int:
+        return sum(len(v) for v in self.perks.values())
 
     @property
     def full_name(self) -> str:
@@ -171,6 +180,11 @@ class NeighborhoodData:
     relationships: dict = field(default_factory=dict)
     # slot → name
     slot_names: dict = field(default_factory=dict)
+    # Business perks are keyed by sim nid, which is *not* the character file
+    # slot this browser keys everything else on — the two never coincide. The
+    # join runs through the sim's object GUID, so hold perks by GUID here and
+    # let each sim look itself up by the GUID in its own character package.
+    perks_by_guid: dict = field(default_factory=dict)
 
 
 def _load_neighborhood_data(nbr_dir: Path) -> NeighborhoodData:
@@ -210,8 +224,27 @@ def _load_neighborhood_data(nbr_dir: Path) -> NeighborhoodData:
 
     # raw_rels: (sim_a, sim_b) → best score seen
     raw: dict[tuple[int, int], int] = {}
+    perks_by_nid: dict[int, dict] = {}
+    nid_to_guid: dict[int, int] = {}
     with open(nbr_pkg, "rb") as f:
         for e in entries:
+            if e.type_id == TID_SDSC:
+                try:
+                    sdsc = parse_sdsc(read_resource(f, e))
+                    nid_to_guid[sdsc["nid"]] = sdsc["guid"]
+                except Exception:
+                    pass
+                continue
+            if e.type_id == s2luastate.TID_LUA_STATE:
+                # Script-side state, one resource per table per sim, with the
+                # sim's nid in the high half of the instance id.
+                try:
+                    name, table = s2luastate.parse_state_table(read_resource(f, e))
+                    if name == s2luastate.TABLE_BUSINESS_REWARDS:
+                        perks_by_nid[e.instance_id2] = s2luastate.sim_perks(table)
+                except Exception:
+                    pass
+                continue
             if e.type_id != 0xCC364C2A:
                 continue
             try:
@@ -231,6 +264,11 @@ def _load_neighborhood_data(nbr_dir: Path) -> NeighborhoodData:
     for (sim_a, sim_b), score in raw.items():
         nd.relationships.setdefault(sim_a, []).append((sim_b, score))
         nd.relationships.setdefault(sim_b, []).append((sim_a, score))
+
+    for nid, perks in perks_by_nid.items():
+        guid = nid_to_guid.get(nid)
+        if guid:
+            nd.perks_by_guid[guid] = perks
 
     return nd
 
@@ -263,8 +301,20 @@ def load_sim(pkg_path: Path, neighborhood: str, nd: NeighborhoodData | None = No
                     sim.species   = _SPECIES_MAP.get(attrs.get('species', 0), "")
                     sim.gender    = _GENDER_MAP.get(attrs.get('gender', 0), "")
                     sim.fitness   = attrs.get('fitness', 0)
+                elif e.type_id == 0x4F424A44 and not sim.guid:
+                    # OBJD word 14/15 — the sim's object GUID, the only key
+                    # that ties a character file to its neighborhood record.
+                    data = read_resource(f, e)
+                    if len(data) >= 0x60:
+                        sim.guid = struct.unpack_from("<I", data, 0x5C)[0]
     except Exception:
         pass
+
+    if nd and sim.guid:
+        found = nd.perks_by_guid.get(sim.guid)
+        if found:
+            sim.perk_points = found["points"]
+            sim.perks = found["perks"]
 
     if nd and slot:
         raw_rels = nd.relationships.get(slot, [])
@@ -501,10 +551,27 @@ class SimBrowser(tk.Tk):
         div2 = tk.Frame(parent, height=1, bg="#2a2a2a")
         div2.pack(fill=tk.X, padx=24, pady=10)
 
+        # Business perks — only a handful of sims in a neighborhood own any,
+        # so the whole block is packed and unpacked per selection rather than
+        # sitting empty. Rows are rebuilt in _show_sim.
+        self._perk_frame = tk.Frame(parent, bg="#141414")
+        perk_header = tk.Frame(self._perk_frame, bg="#141414")
+        perk_header.pack(fill=tk.X, anchor="w")
+        tk.Label(perk_header, text="BUSINESS PERKS", bg="#141414", fg="#555555",
+                 font=("Helvetica", 9, "bold"), anchor="w").pack(side=tk.LEFT)
+        self._perk_points = tk.Label(perk_header, text="", bg="#141414",
+                                     fg="#d4a343", font=("Helvetica", 9, "bold"))
+        self._perk_points.pack(side=tk.LEFT, padx=(8, 0))
+        self._perk_body = tk.Frame(self._perk_frame, bg="#141414")
+        self._perk_body.pack(fill=tk.X, anchor="w", pady=(4, 0))
+
+        self._perk_div = tk.Frame(parent, height=1, bg="#2a2a2a")
+
         # Relationships
-        tk.Label(parent, text="RELATIONSHIPS", bg="#141414", fg="#555555",
-                 font=("Helvetica", 9, "bold"), anchor="w"
-                 ).pack(padx=24, anchor="w")
+        self._rel_header = tk.Label(parent, text="RELATIONSHIPS", bg="#141414",
+                                    fg="#555555", font=("Helvetica", 9, "bold"),
+                                    anchor="w")
+        self._rel_header.pack(padx=24, anchor="w")
 
         rel_outer = tk.Frame(parent, bg="#141414")
         rel_outer.pack(fill=tk.BOTH, expand=True, padx=24, pady=(4, 0))
@@ -606,6 +673,8 @@ class SimBrowser(tk.Tk):
         self._bio_text.insert(tk.END, sim.bio or "(No bio)")
         self._bio_text.config(state=tk.DISABLED)
 
+        self._show_perks(sim)
+
         self._rel_text.config(state=tk.NORMAL)
         self._rel_text.delete("1.0", tk.END)
 
@@ -634,6 +703,45 @@ class SimBrowser(tk.Tk):
 
         self._rel_text.config(state=tk.DISABLED)
         self._file_label.config(text=str(sim.char_file))
+
+    def _show_perks(self, sim: SimInfo):
+        for w in self._perk_body.winfo_children():
+            w.destroy()
+
+        # A sim with points but nothing bought yet is still worth showing —
+        # that's the state the game is nagging about.
+        if not sim.perks and not sim.perk_points:
+            self._perk_frame.pack_forget()
+            self._perk_div.pack_forget()
+            return
+
+        self._perk_frame.pack(fill=tk.X, padx=24, anchor="w",
+                              before=self._rel_header)
+        self._perk_div.pack(fill=tk.X, padx=24, pady=10,
+                            before=self._rel_header)
+
+        pts = sim.perk_points
+        self._perk_points.config(
+            text=f"{pts} unspent point{'' if pts == 1 else 's'}" if pts else "")
+
+        # Tracks in the order the in-game picker shows its columns.
+        for track in s2luastate.BUSINESS_PERKS:
+            got = sim.perks.get(track)
+            if not got:
+                continue
+            row = tk.Frame(self._perk_body, bg="#141414")
+            row.pack(fill=tk.X, anchor="w")
+            tk.Label(row, text=track, bg="#141414", fg="#7ab8e8",
+                     font=("Helvetica", 11, "bold"), width=12, anchor="w"
+                     ).pack(side=tk.LEFT)
+            tk.Label(row, text=" › ".join(got), bg="#141414", fg="#cccccc",
+                     font=("Helvetica", 11), anchor="w", justify=tk.LEFT
+                     ).pack(side=tk.LEFT)
+        for track, got in sim.perks.items():
+            if track not in s2luastate.BUSINESS_PERKS:
+                tk.Label(self._perk_body, text=f"{track}: {', '.join(got)}",
+                         bg="#141414", fg="#888888", font=("Helvetica", 11),
+                         anchor="w").pack(fill=tk.X, anchor="w")
 
     # ------------------------------------------------------------------
     # Export

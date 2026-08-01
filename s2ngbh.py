@@ -209,24 +209,10 @@ def sim_badges(ngbh: dict) -> dict[int, dict[str, dict]]:
     return out
 
 
-# --- reference data ---------------------------------------------------------
+# --- see also ---------------------------------------------------------------
 
-# The 25 Business Perks, in the five tracks the game buys them along, from the
-# Business Rewards object (GUID 0x50728F08, STR# 0x93) in the Open for Business
-# objects.package. Which perks a given sim has bought is NOT stored in any
-# resource this toolkit reads — the game sets and tests them through a native
-# primitive (0x007E), not through save data we can see — so this table is
-# reference only, for naming perks the game reports elsewhere.
-BUSINESS_PERKS = {
-    "Connections": ["Notable Reputation", "Sterling Reputation", "Network",
-                    "Head for Numbers", "Power Network"],
-    "Cash": ["LeTourneau Prize", "Valued Client Rebate",
-             "Chamber of Commerce Prize", "Owners Association Award",
-             "Will Wright Grant"],
-    "Motivation": ["Simply Influential", "Perk Up", "Motivational Speech",
-                   "Boundless Influence", "Rally Forth!"],
-    "Perception": ["Assess Mood", "Assess Desire", "Look for Mark",
-                   "Convincing Personality", "Manipulation"],
-    "Wholesale": ["Wholesale Discount", "Supplier Partnership", "Bargain Hunter",
-                  "Serious Negotiator", "Shark of Sharks"],
-}
+# Business Perks are not in this token store. They live in a per-sim Lua state
+# table (resource type 0x3053CF74) alongside the NGBH in the neighborhood
+# package — see s2luastate. Two searches here came up empty before that turned
+# up: no token in a sim's group encodes the state, and no token GUID is shared
+# by a neighborhood's business owners while staying rare elsewhere.
