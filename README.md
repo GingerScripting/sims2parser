@@ -44,6 +44,40 @@ app never writes a single byte to your saves.
   parts you like. The 33 traits are transcribed from the printed guides —
   19 from Nightlife ch. 4, 14 more from Bon Voyage ch. 1 — not from memory.
 
+### The sim page
+
+![A sim's detail page, with personality, skill, and interest meters](docs/detail.png)
+
+Everything the save knows about one sim on a single page. The career line is
+the real in-game rank — "Science Teacher — Science, level 4", not "Science 4" —
+resolved through `careers.json`, and parents, siblings, and spouses are links,
+so walking a bloodline is a series of clicks.
+
+### Family tree
+
+![Family tree centred on Ferdinand Terrano, five generations of Grunts](docs/tree.png)
+
+Strangetown's Grunt–Terrano tangle, which is exactly the case that makes this
+hard: every couple here is joined by a **dashed** line, meaning the save records
+shared children but no marriage. Solid pink means the game recorded a wedding.
+Click any box to re-centre the tree on that sim and keep walking.
+
+### Search and filters
+
+![The filter menu open, showing stackable filters and the aspiration submenu](docs/filters.png)
+
+Filters stack rather than replace, and the counter at the bottom keeps score —
+here Playable + Adult has cut 708 sims down to 104, with Aspiration about to
+narrow it further.
+
+### Randomizer
+
+![The New Teen roller showing an aspiration, two turn-ons, and a turn-off](docs/randomizer.png)
+
+A *New Teen* roll: one aspiration, two Turn Ons, one Turn Off, guaranteed
+distinct. Each row re-rolls on its own, so you can keep Knowledge and spin the
+traits again.
+
 ### The journal
 
 A per-neighborhood play journal with one entry per season ("01 Spring",
@@ -84,6 +118,11 @@ season's real story goes in and the noise stays out; **Add All** skips the
 checklist. Anything left unticked stays pending for next time. Both the Journal
 tab and the neighborhood menu show a count of what is waiting, so a hood you
 haven't rotated to yet still announces itself.
+
+![The review checklist, 49 detected changes grouped by household](docs/review.png)
+
+Forty-nine changes across twelve households, grouped by family with a per-household
+**None**/**All**, and a picker for which season's entry they land in.
 
 Reciprocal events are reported once, not twice — a marriage is one line, not
 one per spouse — and a whole household relocating is one line rather than one
