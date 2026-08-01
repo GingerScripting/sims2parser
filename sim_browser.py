@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Sims 2 character browser — GUI showing sims with names, bios, and relationships."""
 
+# Annotations stay strings so the modules import under the system
+# python3 (3.9), which the app gets when launched from Finder.
+from __future__ import annotations
+
 import csv
 import io
 import struct
