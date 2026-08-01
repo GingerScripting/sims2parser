@@ -125,6 +125,8 @@ the app trivially incapable of corrupting a save).
 | `s2parser.py` | DBPF container + QFS/RefPack decompression + BHAV (SimAntics) decompiler. Also a CLI: `python3 s2parser.py --bhav file.package` |
 | `s2neighborhood.py` | Turns a neighborhood's packages into JSON: sims, households, lots, family ties, relationships, businesses. `python3 s2neighborhood.py --out sims.json` |
 | `s2ngbh.py` | The neighborhood token store (NGBH): owned businesses with their rank, and every sim's talent badges |
+| `s2luastate.py` | Per-sim Lua state tables (`0x3053CF74`): Open for Business perks and unspent perk points, and Pets learned behaviors |
+| `s2savediff.py` | Snapshots a save and diffs two snapshots by package, resource, and byte — the "where does the game keep X?" tool. `python3 s2savediff.py snap before` / `diff before after --minus …` |
 | `careers.json` | Career/major GUID → name and per-level job titles, harvested from the game's own `objects.package` files (base + every EP) |
 | `s2writer.py` / `s2object.py` | DBPF *writer* and resource builders (BHAV, TTAB, OBJD…) used by companion projects that generate custom objects |
 | `SimBrowser/` | The SwiftUI app ([its own README](SimBrowser/README.md)) |
@@ -165,10 +167,15 @@ travelers:
   rank** — the game keeps a home business's rank in the lot's own package
   with the rest of its object state.
 - Talent badges are tokens on the sim, scored 0–1000 with Bronze/Silver/Gold
-  at 333/666/1000. Which **Business Perks** a sim has bought is not in the
-  save in any form we could find — the game grants and tests them through a
-  native primitive (`0x007E`), so `s2ngbh.BUSINESS_PERKS` only names the 25
-  perks and their five tracks.
+  at 333/666/1000. Which **Business Perks** a sim has bought is *not* in that
+  token store, which is why it looks at first like the save doesn't record it
+  at all: the game grants and tests perks from its script side, through the
+  SimAntics `LUA` primitive (`0x007E`), and persists the result in a separate
+  per-sim resource type (`0x3053CF74`) — one table named `Business Rewards`,
+  holding the 25 perks across their five tracks plus unspent points. See
+  `s2luastate.sim_business_perks()`. It was found by saving either side of
+  buying a single perk and diffing (`s2savediff.py`); the perk showed up as a
+  24-byte growth in a resource type nothing here parsed yet.
 
 And one for macOS developers: on macOS 26, a `ScrollView` in a window's root
 SwiftUI hierarchy can shift sibling views ~16pt off-window (Liquid Glass
