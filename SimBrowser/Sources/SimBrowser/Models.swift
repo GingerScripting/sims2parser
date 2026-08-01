@@ -12,6 +12,30 @@ struct Hood: Decodable, Identifiable, Hashable {
     var name: String
     var sims: [Sim]
     var families: [Family]
+    /// Optional so a sims.json cached by a build that ignored businesses still decodes.
+    var businesses: [Business]?
+}
+
+/// An owned lot. Rank and customer loyalty come from a household token the
+/// game only writes for a business run away from home, and only once it has
+/// been opened — so a home business, and a community lot bought but never
+/// opened, are both reported with no rank rather than left out.
+struct Business: Decodable, Identifiable, Hashable {
+    var lot: Int
+    var name: String
+    var ownerNid: Int
+    var owner: String
+    var ownerFamilyId: Int?
+    var ownerHousehold: String
+    var homeBusiness: Bool
+    var rank: Int?
+    var customerLoyalty: Int?
+
+    var id: Int { lot }
+    /// A home business's name is the household's address — the game never
+    /// asks you to name one.
+    var displayName: String { name.isEmpty ? "Lot \(lot)" : name }
+    static let maxRank = 10
 }
 
 struct Family: Decodable, Identifiable {
@@ -31,6 +55,63 @@ struct Relationship: Decodable, Hashable {
     var familyRel: String
     var bff: Bool
     var name: String
+}
+
+/// Open for Business perks, as `s2luastate.sim_perks` writes them: unspent
+/// points, plus the bought perks of each track in tier order. Only tracks with
+/// something bought appear — an untouched track is simply absent.
+struct PerkState: Decodable, Hashable {
+    var points: Int = 0
+    var perks: [String: [String]] = [:]
+
+    /// The five tracks in the order the in-game picker lays out its columns.
+    /// Named here rather than read from the save because the save only tells us
+    /// about tracks a sim has actually spent in, and an empty track is exactly
+    /// what the progress display is for. Each track has five tiers.
+    static let trackOrder = ["Connections", "Perception", "Cash", "Wholesale", "Motivation"]
+    static let tiersPerTrack = 5
+
+    var totalBought: Int { perks.values.reduce(0) { $0 + $1.count } }
+    var isEmpty: Bool { points == 0 && totalBought == 0 }
+
+    /// Every known track, bought perks first-tier-first, empty tracks included.
+    var tracks: [(name: String, bought: [String])] {
+        Self.trackOrder.map { ($0, perks[$0] ?? []) }
+    }
+
+    /// Anything the parser could not place in a known track — "Other" in
+    /// practice, which a stock game never produces but a mod might.
+    var unknownTracks: [(name: String, bought: [String])] {
+        perks.filter { !Self.trackOrder.contains($0.key) }
+            .sorted { $0.key < $1.key }
+            .map { ($0.key, $0.value) }
+    }
+}
+
+/// One talent badge, as `s2ngbh.sim_badges` writes it. Points run 0–1000 for
+/// the three levels but are not capped there — the game keeps counting past
+/// Gold, so a sim can sit at 1333 Sales.
+struct Badge: Decodable, Hashable {
+    var points: Int
+    /// "Bronze", "Silver", "Gold", or empty below the first threshold at 333.
+    var level: String
+
+    /// The order the game's badge panel lists them, Open for Business first
+    /// then the two Seasons additions. Badges are only recorded once a sim has
+    /// some progress, so this is a display order, not a checklist.
+    static let displayOrder = [
+        "Sales", "Stocking", "Cash Register", "Robotics", "Toy Making",
+        "Flower Arranging", "Cosmetology", "Gardening", "Fishing",
+    ]
+    static let thresholds = [("Bronze", 333), ("Silver", 666), ("Gold", 1000)]
+
+    /// Position in `displayOrder`, for breaking ties on points.
+    static func order(of name: String) -> Int {
+        displayOrder.firstIndex(of: name) ?? displayOrder.count
+    }
+
+    /// How many of the three levels are earned, for the progress pips.
+    var levelsEarned: Int { Badge.thresholds.filter { points >= $0.1 }.count }
 }
 
 struct Sim: Decodable, Identifiable, Hashable {
@@ -90,8 +171,31 @@ struct Sim: Decodable, Identifiable, Hashable {
     var loves: [String]
     var bestFriends: [String]
     var enemies: [String]
+    /// Optional so a sims.json cached by a build that ignored these still decodes.
+    var perks: PerkState?
+    var badges: [String: Badge]?
+    /// Names of the businesses the sim's *household* owns — the parser gives
+    /// every member the same list. Which of them this sim personally owns
+    /// comes from `Hood.businesses`, which is also the only place the rank is.
+    var businesses: [String]?
 
     var id: Int { nid }
+    var perkState: PerkState { perks ?? PerkState() }
+    var hasBusinessPerks: Bool { !perkState.isEmpty }
+
+    /// Earned badges, strongest first — a sim usually has one or two, and
+    /// which they are matters more than the game's fixed panel order.
+    var rankedBadges: [(name: String, badge: Badge)] {
+        (badges ?? [:])
+            .map { (name: $0.key, badge: $0.value) }
+            .sorted {
+                $0.badge.points != $1.badge.points
+                    ? $0.badge.points > $1.badge.points
+                    : Badge.order(of: $0.name) < Badge.order(of: $1.name)
+            }
+    }
+    var hasBadges: Bool { !(badges ?? [:]).isEmpty }
+    var ownsBusiness: Bool { !(businesses ?? []).isEmpty }
     var fullName: String {
         let n = "\(first) \(last)".trimmingCharacters(in: .whitespaces)
         return n.isEmpty ? "Sim #\(nid)" : n

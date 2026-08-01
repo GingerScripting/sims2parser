@@ -38,30 +38,101 @@ enum SimTypeFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// Attribute filters that AND together (e.g. Married + In College).
+/// Which way a trait filter is pointing. Traits AND together, so a query like
+/// "Romance adults who aren't dead and aren't married" is two `.no` traits
+/// alongside the age and aspiration pickers.
+enum TraitState: String, CaseIterable, Identifiable {
+    case any, yes, no
+    var id: String { rawValue }
+}
+
+/// How the filter menu groups its traits. Twelve traits in one flat list is a
+/// scroll; four labelled runs of two to five is a glance.
+enum TraitGroup: String, CaseIterable, Identifiable {
+    case household = "Household"
+    case career = "Career"
+    case social = "Social"
+    case business = "Business"
+    var id: String { rawValue }
+}
+
+/// Attribute filters that AND together (e.g. Married + In College). Each is
+/// three-way: unset, must match, or must not match.
 enum TraitFilter: String, CaseIterable, Identifiable {
     case married = "Married"
-    case inCollege = "In College"
-    case employed = "Employed"
-    case retired = "Retired"
     case hasChildren = "Has Children"
-    case inLove = "In Love"
-    case hasEnemies = "Has Enemies"
+    case inCollege = "In College"
     case inFamilyBin = "In Family Bin"
     case deceased = "Deceased"
+    case employed = "Employed"
+    case retired = "Retired"
+    case inLove = "In Love"
+    case hasEnemies = "Has Enemies"
+    case ownsBusiness = "Owns a Business"
+    case hasBusinessPerks = "Has Business Perks"
+    case hasTalentBadges = "Has Talent Badges"
     var id: String { rawValue }
+
+    var group: TraitGroup {
+        switch self {
+        case .married, .hasChildren, .inCollege, .inFamilyBin, .deceased: return .household
+        case .employed, .retired: return .career
+        case .inLove, .hasEnemies: return .social
+        case .ownsBusiness, .hasBusinessPerks, .hasTalentBadges: return .business
+        }
+    }
+
+    /// Wording for the excluding side. Written out rather than generated,
+    /// because "Not Has Children" is not something to put in a menu — and
+    /// because the useful name for not-deceased is "Living".
+    var negativeLabel: String {
+        switch self {
+        case .married: return "Not Married"
+        case .hasChildren: return "No Children"
+        case .inCollege: return "Not In College"
+        case .inFamilyBin: return "Not In Family Bin"
+        case .deceased: return "Living"
+        case .employed: return "Unemployed"
+        case .retired: return "Not Retired"
+        case .inLove: return "Not In Love"
+        case .hasEnemies: return "No Enemies"
+        case .ownsBusiness: return "Owns No Business"
+        case .hasBusinessPerks: return "No Business Perks"
+        case .hasTalentBadges: return "No Talent Badges"
+        }
+    }
+
+    func label(for state: TraitState) -> String {
+        switch state {
+        case .any: return "Any"
+        case .yes: return rawValue
+        case .no: return negativeLabel
+        }
+    }
 
     func matches(_ s: Sim) -> Bool {
         switch self {
         case .married: return !s.spouse.isEmpty
-        case .inCollege: return s.onCampus
-        case .employed: return !s.career.isEmpty
-        case .retired: return !s.retiredCareer.isEmpty
         case .hasChildren: return !s.children.isEmpty
-        case .inLove: return !s.loves.isEmpty
-        case .hasEnemies: return !s.enemies.isEmpty
+        case .inCollege: return s.onCampus
         case .inFamilyBin: return s.isInFamilyBin
         case .deceased: return s.isDead
+        case .employed: return !s.career.isEmpty
+        case .retired: return !s.retiredCareer.isEmpty
+        case .inLove: return !s.loves.isEmpty
+        case .hasEnemies: return !s.enemies.isEmpty
+        case .ownsBusiness: return s.ownsBusiness
+        case .hasBusinessPerks: return s.hasBusinessPerks
+        case .hasTalentBadges: return s.hasBadges
+        }
+    }
+
+    /// Whether a sim passes this trait in the given state.
+    func admits(_ s: Sim, _ state: TraitState) -> Bool {
+        switch state {
+        case .any: return true
+        case .yes: return matches(s)
+        case .no: return !matches(s)
         }
     }
 }
@@ -82,7 +153,9 @@ struct ContentView: View {
     @State private var typeFilter: SimTypeFilter = .playable
     @State private var genderFilter = "All"
     @State private var aspirationFilter = "All"
-    @State private var traitFilters = Set<TraitFilter>()
+    /// Traits left out of the dictionary are unset. Only the ones the user has
+    /// actually pointed somewhere are stored.
+    @State private var traitStates = [TraitFilter: TraitState]()
     @State private var selection = Set<Sim>()
     @State private var showRandomizer = false
     @State private var showChangeReview = false
@@ -90,10 +163,48 @@ struct ContentView: View {
     /// than from SimDetailView, which lives inside its own NSHostingView.
     @State private var treeSim: Sim?
 
+    private var activeTraits: [(TraitFilter, TraitState)] {
+        TraitFilter.allCases.compactMap { trait in
+            guard let state = traitStates[trait], state != .any else { return nil }
+            return (trait, state)
+        }
+    }
+
     private var activeExtraFilterCount: Int {
-        traitFilters.count
+        activeTraits.count
             + (genderFilter == "All" ? 0 : 1)
             + (aspirationFilter == "All" ? 0 : 1)
+    }
+
+    /// The filters in force, spelled out. A count alone can't show which way a
+    /// trait points, and "Married" versus "Not Married" is the whole point.
+    private var activeFilterSummary: [String] {
+        var parts: [String] = []
+        if typeFilter != .playable { parts.append(typeFilter.rawValue) }
+        if ageFilter != "All" { parts.append(ageFilter) }
+        if genderFilter != "All" { parts.append(genderFilter) }
+        if aspirationFilter != "All" { parts.append(aspirationFilter) }
+        parts.append(contentsOf: activeTraits.map { $0.0.label(for: $0.1) })
+        return parts
+    }
+
+    private var anyFilterActive: Bool {
+        !activeFilterSummary.isEmpty
+    }
+
+    private func clearFilters() {
+        traitStates = [:]
+        genderFilter = "All"
+        aspirationFilter = "All"
+        ageFilter = "All"
+        typeFilter = .playable
+    }
+
+    private func traitBinding(_ trait: TraitFilter) -> Binding<TraitState> {
+        Binding(
+            get: { traitStates[trait] ?? .any },
+            set: { traitStates[trait] = $0 == .any ? nil : $0 }
+        )
     }
 
     private var selectedSim: Sim? {
@@ -118,7 +229,7 @@ struct ContentView: View {
             if ageFilter != "All" && s.age != ageFilter { return false }
             if genderFilter != "All" && s.gender != genderFilter { return false }
             if aspirationFilter != "All" && !s.aspirations.contains(aspirationFilter) { return false }
-            for trait in traitFilters where !trait.matches(s) { return false }
+            for (trait, state) in traitStates where !trait.admits(s, state) { return false }
             if !q.isEmpty {
                 let hay = "\(s.fullName) \(s.household) \(s.address) \(s.career) \(s.careerTitle) \(s.major) \(s.bio)".lowercased()
                 if !hay.contains(q) { return false }
@@ -444,23 +555,22 @@ struct ContentView: View {
                         Text($0).tag($0)
                     }
                 }
-                Divider()
-                ForEach(TraitFilter.allCases) { trait in
-                    Toggle(trait.rawValue, isOn: Binding(
-                        get: { traitFilters.contains(trait) },
-                        set: { on in
-                            if on { traitFilters.insert(trait) } else { traitFilters.remove(trait) }
+                // Each trait is its own submenu of Any / is / is not, the same
+                // shape as the two pickers above it.
+                ForEach(TraitGroup.allCases) { group in
+                    Section(group.rawValue) {
+                        ForEach(TraitFilter.allCases.filter { $0.group == group }) { trait in
+                            Picker(trait.rawValue, selection: traitBinding(trait)) {
+                                ForEach(TraitState.allCases) { state in
+                                    Text(trait.label(for: state)).tag(state)
+                                }
+                            }
                         }
-                    ))
+                    }
                 }
                 Divider()
-                Button("Clear Filters") {
-                    traitFilters = []
-                    genderFilter = "All"
-                    aspirationFilter = "All"
-                    ageFilter = "All"
-                }
-                .disabled(activeExtraFilterCount == 0 && ageFilter == "All")
+                Button("Clear Filters") { clearFilters() }
+                    .disabled(!anyFilterActive)
             } label: {
                 if activeExtraFilterCount > 0 {
                     Label("\(activeExtraFilterCount)", systemImage: "line.3.horizontal.decrease.circle.fill")
@@ -470,7 +580,16 @@ struct ContentView: View {
                 }
             }
             .fixedSize()
-            .help("More filters: gender, aspiration, married, in college…")
+            .help("More filters: gender, aspiration, and twelve traits that can each "
+                  + "be required or excluded (Married / Not Married, Deceased / Living…)")
+            if anyFilterActive {
+                Button { clearFilters() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Clear all filters")
+            }
             Spacer()
         }
         .controlSize(.small)
@@ -481,6 +600,13 @@ struct ContentView: View {
     private var statusBar: some View {
         HStack {
             Text("\(filteredSims.count) of \(hood?.sims.count ?? 0) sims")
+            if anyFilterActive {
+                Text(activeFilterSummary.joined(separator: " · "))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(activeFilterSummary.joined(separator: " · "))
+            }
             Spacer()
             if let d = store.lastRefreshed {
                 Text("Read \(d.formatted(date: .abbreviated, time: .shortened))")

@@ -17,6 +17,9 @@ struct SimDetailView: View {
                 familySection
                 if !journalMentions.isEmpty { journalSection }
                 traitsSection
+                if sim.hasBadges { badgesSection }
+                if !householdBusinesses.isEmpty { businessesSection }
+                if sim.hasBusinessPerks { businessPerksSection }
                 relationshipsSection
                 footer
             }
@@ -242,6 +245,173 @@ struct SimDetailView: View {
             .frame(width: 90, height: 7)
             Text("\(value / 100)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 18, alignment: .trailing)
+        }
+    }
+
+    // MARK: talent badges
+
+    private var badgesSection: some View {
+        section("Talent Badges") {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(sim.rankedBadges, id: \.name) { name, badge in
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(name).font(.callout).frame(width: 120, alignment: .leading)
+                        HStack(spacing: 3) {
+                            ForEach(0..<Badge.thresholds.count, id: \.self) { i in
+                                Circle()
+                                    .fill(i < badge.levelsEarned
+                                          ? AnyShapeStyle(badgeColor(Badge.thresholds[i].0))
+                                          : AnyShapeStyle(.quaternary))
+                                    .frame(width: 7, height: 7)
+                            }
+                        }
+                        .frame(width: 34, alignment: .leading)
+                        // Below 333 the game has recorded progress but awarded
+                        // nothing, which is worth showing as its own state.
+                        Text(badge.level.isEmpty ? "In progress" : badge.level)
+                            .font(.callout)
+                            .foregroundStyle(badge.level.isEmpty
+                                             ? AnyShapeStyle(.tertiary)
+                                             : AnyShapeStyle(badgeColor(badge.level)))
+                            .frame(width: 80, alignment: .leading)
+                        Text("\(badge.points)")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+        }
+    }
+
+    private func badgeColor(_ level: String) -> Color {
+        switch level {
+        case "Gold": return .yellow
+        case "Silver": return .gray
+        case "Bronze": return .brown
+        default: return .secondary
+        }
+    }
+
+    // MARK: businesses
+
+    /// Everything the sim's household owns. The parser gives each member the
+    /// same list of names, so ownership within the household is settled by the
+    /// hood-level records, which are also the only place a rank lives.
+    private var householdBusinesses: [Business] {
+        guard let hood, let all = hood.businesses else {
+            // No hood in hand (or data from an older build): fall back to the
+            // names on the sim, which is all that is left to show.
+            return (sim.businesses ?? []).map {
+                Business(lot: 0, name: $0, ownerNid: 0, owner: "", ownerFamilyId: nil,
+                         ownerHousehold: "", homeBusiness: false,
+                         rank: nil, customerLoyalty: nil)
+            }
+        }
+        return all.filter { $0.ownerFamilyId == sim.familyId }
+            .sorted {
+                ($0.rank ?? -1) != ($1.rank ?? -1)
+                    ? ($0.rank ?? -1) > ($1.rank ?? -1)      // best-ranked first
+                    : $0.displayName < $1.displayName
+            }
+    }
+
+    private var businessesSection: some View {
+        section("Businesses") {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(householdBusinesses.enumerated()), id: \.offset) { _, biz in
+                    businessRow(biz)
+                }
+            }
+        }
+    }
+
+    private func businessRow(_ biz: Business) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(biz.displayName).font(.callout).fontWeight(.medium)
+                if biz.ownerNid == 0 {
+                    // The household holds a business token for this lot but no
+                    // sim is recorded as its owner, so home vs community is not
+                    // ours to assert.
+                    chip("No recorded owner", .gray)
+                } else {
+                    chip(biz.homeBusiness ? "Home" : "Community", biz.homeBusiness ? .brown : .teal)
+                }
+                if biz.ownerNid != sim.nid && !biz.owner.isEmpty {
+                    Text("owned by").font(.caption).foregroundStyle(.tertiary)
+                    simLink(biz.owner).font(.caption)
+                }
+            }
+            HStack(spacing: 10) {
+                if let rank = biz.rank {
+                    Text("Rank \(rank) of \(Business.maxRank)")
+                    if let loyal = biz.customerLoyalty {
+                        Text("· \(loyal) loyal customer\(loyal == 1 ? "" : "s")")
+                    }
+                } else if biz.homeBusiness {
+                    // The rank token is only written for a business away from
+                    // home, and only after its first opening.
+                    Text("Rank kept in the lot, not the neighborhood")
+                } else {
+                    Text("No rank recorded — not opened yet")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: business perks
+
+    /// Only a handful of sims in a hood own any, so the whole section is
+    /// omitted unless there is something to show — including the case of
+    /// unspent points and nothing bought, which is the state worth noticing.
+    private var businessPerksSection: some View {
+        let state = sim.perkState
+        return section("Business Perks") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text("\(state.totalBought) of \(PerkState.trackOrder.count * PerkState.tiersPerTrack) bought")
+                        .font(.callout).foregroundStyle(.secondary)
+                    if state.points > 0 {
+                        chip("\(state.points) unspent point\(state.points == 1 ? "" : "s")", .orange)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(state.tracks, id: \.name) { track in
+                        perkTrackRow(track.name, bought: track.bought)
+                    }
+                    // Modded perks have no known tier count, so no progress pips.
+                    ForEach(state.unknownTracks, id: \.name) { track in
+                        perkTrackRow(track.name, bought: track.bought, showProgress: false)
+                    }
+                }
+            }
+        }
+    }
+
+    private func perkTrackRow(_ name: String, bought: [String], showProgress: Bool = true) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(name)
+                .font(.callout)
+                .foregroundStyle(bought.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+                .frame(width: 92, alignment: .leading)
+            HStack(spacing: 3) {
+                if showProgress {
+                    ForEach(0..<PerkState.tiersPerTrack, id: \.self) { tier in
+                        Circle()
+                            .fill(tier < bought.count ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.quaternary))
+                            .frame(width: 7, height: 7)
+                    }
+                }
+            }
+            .frame(width: 50, alignment: .leading)
+            // Tier order, so the arrows read as the sequence they were bought in.
+            Text(bought.isEmpty ? "—" : bought.joined(separator: " › "))
+                .font(.callout)
+                .foregroundStyle(bought.isEmpty ? .tertiary : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
     }
 
