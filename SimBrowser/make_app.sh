@@ -3,15 +3,44 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-swift build -c release
+MIN_MACOS=13.0
+BUILT="/tmp/simbrowser-universal.$$"
+trap 'rm -f "$BUILT"' EXIT
+
+# Universal by default, so the app runs on Intel as well as Apple silicon.
+# ARCHS=native builds only for this machine, which is quicker while iterating.
+#
+# Built one slice at a time and lipo'd together rather than with `swift build
+# --arch arm64 --arch x86_64`, which routes through xcbuild and so needs full
+# Xcode. --triple only needs the Command Line Tools, which is all the README
+# asks people to install.
+if [ "${ARCHS:-universal}" = native ]; then
+    swift build -c release
+    BIN=".build/release/SimBrowser"
+else
+    for arch in arm64 x86_64; do
+        swift build -c release --triple "$arch-apple-macosx$MIN_MACOS"
+    done
+    lipo -create -output "$BUILT" \
+        ".build/arm64-apple-macosx/release/SimBrowser" \
+        ".build/x86_64-apple-macosx/release/SimBrowser"
+    BIN="$BUILT"
+fi
 
 APP="../Sim Browser.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cp .build/release/SimBrowser "$APP/Contents/MacOS/SimBrowser"
+cp "$BIN" "$APP/Contents/MacOS/SimBrowser"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+# The Python side rides along inside the bundle, so the app does not care where
+# the repo was cloned. This is the extractor plus its full import closure —
+# careers.json is read relative to s2neighborhood.py, so it has to sit here too.
+for f in s2neighborhood.py s2parser.py s2ngbh.py s2luastate.py careers.json; do
+    cp "../$f" "$APP/Contents/Resources/$f"
+done
+
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -23,12 +52,23 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>LSMinimumSystemVersion</key><string>$MIN_MACOS</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSHumanReadableCopyright</key><string>Reads Sims 2 saves read-only.</string>
 </dict>
 </plist>
 PLIST
 
-codesign --force --sign - "$APP" 2>/dev/null || true
+# Ad-hoc by default, which is enough to run locally. Pass a real identity to get
+# something distributable — SIGN_ID="Developer ID Application: …" ./make_app.sh
+# Signs last, so the Resources payload is covered by the seal.
+SIGN_ID="${SIGN_ID:--}"
+if [ "$SIGN_ID" = "-" ]; then
+    codesign --force --sign - "$APP" 2>/dev/null || true
+else
+    codesign --force --deep --timestamp --options runtime \
+        --sign "$SIGN_ID" "$APP"
+    codesign --verify --strict --verbose=1 "$APP"
+fi
+
 echo "Built: $(cd "$(dirname "$APP")" && pwd)/$(basename "$APP")"

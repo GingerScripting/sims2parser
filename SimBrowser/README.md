@@ -48,5 +48,7 @@ Best Friend, Loves, Enemies, Funds, Bio.
 
 ## Settings
 
-- Extractor location (if the project moves):
+- Extractor location. The app uses the copy bundled in `Contents/Resources`,
+  falling back to a source checkout when run via `swift run`. To point it
+  somewhere else:
   `defaults write org.macadmins.rebecca.simbrowser extractorPath /path/to/s2neighborhood.py`
