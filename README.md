@@ -144,6 +144,20 @@ Requirements: macOS 13+, Xcode command-line tools (for `swift build`),
 Python 3.9+ (system Python is fine), and The Sims 2 Super Collection with at
 least one saved neighborhood.
 
+The build is universal (arm64 + x86_64) and self-contained: `make_app.sh` copies
+the extractor and everything it imports into `Contents/Resources`, so the
+finished `.app` can be moved anywhere — `/Applications`, a `.dmg`, a `.pkg`
+payload — without needing the repo it was built from. Two knobs, both optional:
+
+```sh
+ARCHS=native ./SimBrowser/make_app.sh    # this machine only, quicker to iterate
+SIGN_ID="Developer ID Application: …" ./SimBrowser/make_app.sh
+```
+
+Without `SIGN_ID` the app is ad-hoc signed, which runs locally but will be
+stopped by Gatekeeper if anyone downloads it. Signing happens after the payload
+is staged, so `Contents/Resources` is covered by the seal.
+
 First launch reads your neighborhoods automatically (a few seconds). **⌘R**
 re-reads them any time. Data is cached in
 `~/Library/Application Support/SimBrowser/`.

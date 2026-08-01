@@ -12,11 +12,23 @@ final class DataStore: ObservableObject {
         didSet { persistChanges() }
     }
 
-    /// Where the extractor script lives. Override with
+    /// Where the extractor script lives, in falling priority: an explicit
+    /// override, the copy bundled inside the app, then a source checkout.
+    ///
+    /// The bundled copy is what makes the app relocatable — `make_app.sh` puts
+    /// the extractor and everything it imports in `Contents/Resources`, so a
+    /// packaged build has no dependency on where the repo was cloned. The
+    /// checkout path is the fallback for `swift run` during development, where
+    /// there is no bundle to read from. Override with
     /// `defaults write org.macadmins.rebecca.simbrowser extractorPath …`
     var extractorPath: String {
-        UserDefaults.standard.string(forKey: "extractorPath")
-            ?? NSString(string: "~/Documents/sims_2_project/s2neighborhood.py").expandingTildeInPath
+        if let custom = UserDefaults.standard.string(forKey: "extractorPath") { return custom }
+        if let bundled = Bundle.main.resourceURL?
+            .appendingPathComponent("s2neighborhood.py").path,
+           FileManager.default.isReadableFile(atPath: bundled) {
+            return bundled
+        }
+        return NSString(string: "~/Documents/sims_2_project/s2neighborhood.py").expandingTildeInPath
     }
 
     /// Which interpreter runs the extractor. Not `/usr/bin/env python3`: an app
