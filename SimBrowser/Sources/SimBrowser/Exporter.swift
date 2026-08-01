@@ -28,6 +28,22 @@ enum CSVExporter {
         ("Loves", { s, _ in s.loves.joined(separator: "; ") }),
         ("Enemies", { s, _ in s.enemies.joined(separator: "; ") }),
         ("Funds", { s, _ in s.household.isEmpty ? "" : String(s.funds) }),
+        // Household-owned, same for every member — the rank lives on the hood
+        // record, not the sim, so the CSV carries names only.
+        ("Businesses", { s, _ in (s.businesses ?? []).joined(separator: "; ") }),
+        ("Talent Badges", { s, _ in
+            s.rankedBadges
+                .map { $0.badge.level.isEmpty ? "\($0.name) (\($0.badge.points))"
+                                              : "\($0.name) \($0.badge.level)" }
+                .joined(separator: "; ")
+        }),
+        ("Business Perks", { s, _ in
+            s.perkState.tracks
+                .filter { !$0.bought.isEmpty }
+                .map { "\($0.name): \($0.bought.joined(separator: " > "))" }
+                .joined(separator: "; ")
+        }),
+        ("Perk Points", { s, _ in s.hasBusinessPerks ? String(s.perkState.points) : "" }),
         ("Bio", { s, _ in s.bio }),
     ]
 
