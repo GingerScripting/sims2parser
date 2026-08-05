@@ -89,15 +89,38 @@ class ResourceEntry:
     instance_id2: int  # only used in index v7.2+
     offset: int
     size: int
+    # Index version of the package this entry came from; decides which of the
+    # two instance fields is the real instance id. See `instance` below.
+    index_version: "tuple[int, int]" = (7, 1)
 
     @property
     def type_name(self) -> str:
         return TYPE_NAMES.get(self.type_id, f"0x{self.type_id:08X}")
 
+    @property
+    def instance(self) -> int:
+        """The resource's real instance id, for either index version.
+
+        The real instance is always the 3rd uint32 of the index entry, but
+        v7.2 entries carry an extra field and `parse_index` lands that 3rd
+        uint32 in `instance_id2` for them (`instance_id` then holds the
+        resource id, nearly always 0). v7.1 and older have no extra field, so
+        the 3rd uint32 stays in `instance_id`. Reading the wrong one turns a
+        package's private BHAV 0x1000 into instance 0 and makes unrelated mods
+        look like they collide — always prefer this over the raw fields.
+        """
+        return self.instance_id2 if self.index_version >= (7, 2) else self.instance_id
+
+    @property
+    def resource_id(self) -> int:
+        """The v7.2 index entry's 4th uint32. Always 0 for older indexes."""
+        return self.instance_id if self.index_version >= (7, 2) else 0
+
     def tgi(self) -> str:
-        if self.instance_id2:
-            return f"{self.type_name}  g={self.group_id:08x}  i={self.instance_id2:08x}{self.instance_id:08x}"
-        return f"{self.type_name}  g={self.group_id:08x}  i={self.instance_id:08x}"
+        s = f"{self.type_name}  g={self.group_id:08x}  i={self.instance:08x}"
+        if self.resource_id:
+            s += f"  r={self.resource_id:08x}"
+        return s
 
 
 HEADER_MAGIC = b"DBPF"
@@ -128,10 +151,14 @@ def parse_index(f: BinaryIO, header: Header) -> list[ResourceEntry]:
     data = f.read(header.index_size)
 
     # Entry layout depends on index version:
-    #   7.0: type, group, instance            → 5 × uint32 = 20 bytes
-    #   7.1: type, group, instance            → 5 × uint32 = 20 bytes  (same)
-    #   7.2: type, group, instance_hi, instance_lo, offset, size → 6 × uint32 = 24 bytes
-    has_iid2 = (header.index_major_version, header.index_minor_version) >= (7, 2)
+    #   7.0: type, group, instance, offset, size               → 5 × uint32 = 20 bytes
+    #   7.1: type, group, instance, offset, size               → 5 × uint32 = 20 bytes  (same)
+    #   7.2: type, group, instance, resource, offset, size     → 6 × uint32 = 24 bytes
+    # The instance is the 3rd uint32 either way, but it is stored in
+    # ResourceEntry.instance_id2 for 7.2 and instance_id below 7.2 — read it
+    # through ResourceEntry.instance rather than picking a field by hand.
+    version = (header.index_major_version, header.index_minor_version)
+    has_iid2 = version >= (7, 2)
     entry_size = 24 if has_iid2 else 20
 
     if header.index_entry_count > 0 and len(data) < header.index_entry_count * entry_size:
@@ -148,7 +175,7 @@ def parse_index(f: BinaryIO, header: Header) -> list[ResourceEntry]:
         else:
             type_id, group_id, iid, offset, size = struct.unpack_from("<IIIII", data, pos)
             iid2 = 0
-        entries.append(ResourceEntry(type_id, group_id, iid, iid2, offset, size))
+        entries.append(ResourceEntry(type_id, group_id, iid, iid2, offset, size, version))
         pos += entry_size
 
     return entries
@@ -526,14 +553,17 @@ def cmd_bhav(path: Path, flat: bool = False):
     bhav_entries = [e for e in entries if e.type_id == 0x42484156]
     print(f"{path.name}  —  {len(bhav_entries)} BHAV(s)\n")
 
-    # First pass: build instance_id → name map for call resolution
+    # First pass: build instance → name map for call resolution. A Call
+    # opcode is the callee's instance id, so this must key off the real
+    # instance — keying off the raw field collapses every BHAV in a v7.2
+    # package onto 0.
     bhav_names: dict[int, str] = {}
     with open(path, "rb") as f:
         for e in bhav_entries:
             raw = read_resource(f, e)
             if len(raw) >= 64:
                 name = raw[:64].split(b'\x00', 1)[0].decode('latin-1', 'replace')
-                bhav_names[e.instance_id] = name
+                bhav_names[e.instance] = name
 
     # Second pass: parse and print with resolved names
     with open(path, "rb") as f:
@@ -553,7 +583,7 @@ def cmd_bhav(path: Path, flat: bool = False):
                     print(header_line)
                     print(render_bhav_tree(bhav, bhav_names))
             except ValueError as exc:
-                print(f"  [skip] {exc}  (iid={e.instance_id:#010x})")
+                print(f"  [skip] {exc}  (iid={e.instance:#010x})")
             print()
 
 

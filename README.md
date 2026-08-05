@@ -28,12 +28,27 @@ app never writes a single byte to your saves.
   hello, Bella). Click any box to re-centre the tree on that sim, which walks
   the whole hood one relative at a time.
 - **Personality, skills, and interests** as SimPE-style meters.
+- **Talent badges** — every badge a sim has made progress on, strongest first,
+  with Bronze/Silver/Gold pips and the raw points. Progress below the first
+  threshold at 333 shows as *In progress* rather than as no badge at all, and
+  points aren't capped at Gold — the game keeps counting.
+- **Businesses** — what the sim's household owns, best-ranked first, each
+  marked Home or Community with its rank and customer loyalty. A business
+  owned by a relative names them and links through. Where the neighborhood has
+  no rank to give — a home business, or a lot bought but never opened — the
+  row says which of the two it is rather than showing a blank.
+- **Business perks** — the Open for Business reward tracks a sim has spent on,
+  each of the five shown to its five tiers, filled pips for what's bought and
+  the perks named in the order they were bought, plus any unspent points. Only
+  a handful of sims in a hood own any, so the panel appears only for those who
+  do — including a sim sitting on points with nothing bought yet.
 - **Life-state awareness** — Young Adults at university, unplaced sims in the
   Family Bin, and the dearly departed (deaths are detected from ghost flags)
   each get their own badge and filter.
 - **Search and stackable filters** — playable/townie, age stage, gender,
   aspiration, married, in college, employed, retired, has children, in love,
-  has enemies, deceased.
+  has enemies, owns a business, has business perks, has talent badges,
+  deceased.
 - **CSV export** — entire neighborhood, the currently filtered list, or just
   the selected sims, in a spreadsheet-friendly column layout.
 - **Randomizer** (the dice in the toolbar) — two rollers. *Event* draws a
@@ -53,6 +68,24 @@ the real in-game rank — "Science Teacher — Science, level 4", not "Science 4
 resolved through `careers.json`, and parents, siblings, and spouses are links,
 so walking a bloodline is a series of clicks.
 
+### Badges, businesses, and perks
+
+![Talent badges, businesses, and business perks on one sim's page](docs/perks.png)
+
+Further down the same page, for a sim who has been playing Open for Business
+properly. Three details this shows that the panels were built around:
+
+- **Stocking sits at 999** — one point short of Gold, and the number is there to
+  say so. Badges are scored, not just tiered, and the score keeps climbing past
+  1,000 once Gold is reached.
+- **Rank 10 of 10, 154 loyal customers** on Ramirez's Fine Furniture. Rank and
+  loyalty come from a household token the game only writes for a business run
+  away from home, which is why a home business shows an owner but no rank.
+- **Motivation is empty and shown anyway**, greyed with an em dash. The save
+  only records tracks a sim has spent in, so an untouched track is absent from
+  the data — drawing all five is what makes "17 of 25 bought" legible as
+  progress rather than a bare number.
+
 ### Family tree
 
 ![Family tree centred on Ferdinand Terrano, three generations of the Grunt line](docs/tree.png)
@@ -70,6 +103,14 @@ Click any box to re-centre the tree on that sim and keep walking.
 Filters stack rather than replace, and the counter at the bottom keeps score —
 here Playable + Adult has cut 708 sims down to 104, with Aspiration about to
 narrow it further.
+
+Every trait filter is three-way: leave it alone, require it, or **exclude** it.
+So "Deceased" also gives you *Living*, "Married" also gives you *Not Married*,
+and a question like *playable Adults with the Romance aspiration who are alive
+and unmarried* is one pass through the menu. The traits are grouped —
+Household, Career, Social, Business — and the status bar spells out what is in
+force, because a badge counting "5 filters" can't tell you which way any of
+them points.
 
 ### Randomizer
 
