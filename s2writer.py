@@ -79,9 +79,9 @@ def read_all_resources(path: Path | str) -> list[Resource]:
         header = s2parser.parse_header(f)
         for e in s2parser.parse_index(f, header):
             data = s2parser.read_resource(f, e)
-            # parse_index stores the index's 3rd u32 (main instance) in
-            # instance_id2 and the 4th (high id) in instance_id
-            out.append(Resource(e.type_id, e.group_id, e.instance_id2, data, e.instance_id))
+            # e.instance/e.resource_id pick the right index fields for the
+            # donor's index version; below 7.2 there is no 4th u32 at all.
+            out.append(Resource(e.type_id, e.group_id, e.instance, data, e.resource_id))
     return out
 
 

@@ -124,7 +124,7 @@ def _resources(pkg: Path) -> dict[tuple, bytes]:
     out = {}
     with open(pkg, "rb") as f:
         for e in entries:
-            key = (e.type_id, e.group_id, e.instance_id, e.instance_id2)
+            key = (e.type_id, e.group_id, e.instance, e.resource_id)
             try:
                 out[key] = s2parser.read_resource(f, e)
             except Exception:
@@ -134,9 +134,9 @@ def _resources(pkg: Path) -> dict[tuple, bytes]:
 
 
 def _tgi(key) -> str:
-    t, g, i, i2 = key
+    t, g, i, r = key
     name = s2parser.TYPE_NAMES.get(t, f"0x{t:08X}")
-    return f"{name} g={g:08x} i={i2:08x}{i:08x}" if i2 else f"{name} g={g:08x} i={i:08x}"
+    return f"{name} g={g:08x} i={i:08x}" + (f" r={r:08x}" if r else "")
 
 
 def _digest(b: bytes) -> str:
