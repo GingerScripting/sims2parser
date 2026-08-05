@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Builders for Sims 2 object package resources (BHAV, STR#, TTAB, OBJD...).
+"""Builders and parsers for Sims 2 object package resources.
+
+Every format below has both a `parse_*` and a matching builder, and the pair
+round-trips byte-for-byte over the donors in sample-packages/ (see _selftest).
+That round-trip is the evidence the layouts are right — modding is
+read-modify-write, so a reader that loses bytes silently corrupts the object.
+
+Parsers keep the regions they don't name as raw bytes rather than dropping
+them, so an edit to one field can't disturb the rest of the resource.
 
 Formats were reverse-engineered from Christianlov's Counterfeit College
 Diploma and TwoJeffs' Sim Blender (see sample-packages/):
@@ -19,18 +27,36 @@ Dialog (opcode 0x0024) operands (plain OK message box, text from the
 object's STR# 0x12D "Dialog prim string set"):
   [0x01, 0,0,0,0,0, 0x08, 0, 0,0,0,0, 0, 0x01, idx_lo, idx_hi]
 
-STR#/TTAs/CTSS: 64B name + u16 0xFDFF + u16 count +
-  count * (lang u8, value cstring, desc cstring)
+STR#/TTAs/CTSS: 64B name + u16 format + u16 count +
+  count * (lang u8, value cstring, desc cstring).
+  Format 0xFFFD (every donor here) carries the description string; 0xFFFF
+  omits it. Read as a u16 the format word is 0xFFFD — earlier notes here
+  wrote it byte-reversed as "0xFDFF".
 
-TTAB: 64B name + u32 0xFFFFFFFF + u32 version(0x4F) + u32 0 + u16 count +
-  count * 74-byte entries + u32 name-len + name.
-  Entry: action tree u16 @+0, guard tree u16 @+2, TTAs index u32 @+36.
+TTAB: 64B name + u32 0xFFFFFFFF + u32 version + u32 0 + u16 count +
+  count * fixed-size entries + u32 name-len + name.
+  Two versions occur, differing only in entry size — 0x4F has a 28-byte
+  motive-advertisement block at +4 that 0x54 drops:
+    v0x4F: 74-byte entries, TTAs index u32 @+36   (Diploma, 4 entries)
+    v0x54: 54-byte entries, TTAs index u32 @+8    (Sim Blender, 81 entries)
+  Both: action tree u16 @+0, guard tree u16 @+2.
+  Entry sizes confirmed by solving against resource length, and the indices
+  by resolving them back to sensible menu labels in the paired TTAs.
+
+OBJf: 64B filename + u32 0 + u32 0 + "OBJf" signature u32 @+72 +
+  u32 count @+76 + count * (guard tree u16, action tree u16).
+  Count is the game-version-dependent length of the fixed function-slot
+  list (37 in the Diploma, 41 in Sim Blender) and equals (len - 80) / 4.
+  Slot 0 = init, slot 1 = main — confirmed: the Diploma's slots hold
+  0x1000/0x1001, whose BHAVs are named "Function - Init"/"Function - Main".
+  Higher slot meanings are NOT verified here, so they stay numbered.
 
 OBJD: 64B filename + 108 u16 fields + u32 name-len + name.
-  Field map per SimsWiki 4F424A44 (byte offsets include the 64B filename):
+  Field map per SimsWiki 4F424A44 (word indices, after the 64B filename):
   word 0 version (139/140), word 7 interaction table (TTAB) id,
   word 9 object TYPE (4 = buyable — never change), words 14/15 GUID lo/hi,
-  word 18 price, word 41 catalog strings (CTSS) instance,
+  word 18 price, words 39/40 room and function catalog sort flags,
+  word 41 catalog strings (CTSS) instance,
   words 52/53 job object GUID (donor mirrors its own GUID here),
   word 58 number of attributes (8 preallocated when 0),
   words 70/71 original (clone source) GUID.
@@ -41,6 +67,7 @@ OBJD: 64B filename + 108 u16 fields + u32 name-len + name.
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass, field
 
 # ---- SimAntics constants ---------------------------------------------------
 
@@ -84,6 +111,22 @@ TYPE_TTAS = 0x54544173
 def _name64(name: str) -> bytes:
     raw = name.encode('latin-1')[:63]
     return raw + b'\x00' * (64 - len(raw))
+
+
+def _read_name64(data: bytes) -> str:
+    return data[:64].split(b'\x00', 1)[0].decode('latin-1', 'replace')
+
+
+def _emit_name64(name: str, raw: bytes | None) -> bytes:
+    """Re-emit a 64-byte name field, preserving the donor's exact padding.
+
+    Maxis resources are not consistent about what follows the terminator, so
+    a parsed-then-rebuilt resource reuses the original bytes unless the name
+    itself was edited. Without this, round-tripping rewrites junk to zeros.
+    """
+    if raw is not None and len(raw) == 64 and _read_name64(raw) == name:
+        return raw
+    return _name64(name)
 
 
 # ---- BHAV ------------------------------------------------------------------
@@ -235,3 +278,416 @@ def patch_objd(donor: bytes, *, filename: str, guid: int, attr_count: int,
     raw = filename.encode('latin-1')
     return (_name64(filename) + struct.pack('<108H', *words)
             + struct.pack('<I', len(raw)) + raw)
+
+
+# ============================================================================
+# Parsers — read side, for read-modify-write editing of existing packages
+# ============================================================================
+
+# ---- STR# / TTAs / CTSS ------------------------------------------------------
+
+STR_FMT_WITH_DESC = 0xFFFD    # lang, value cstring, desc cstring
+STR_FMT_NO_DESC = 0xFFFF      # lang, value cstring
+
+
+@dataclass
+class StrEntry:
+    lang: int
+    value: str
+    desc: str = ''
+
+
+@dataclass
+class StrResource:
+    """A parsed STR#/TTAs/CTSS string table."""
+    name: str
+    format: int
+    entries: list[StrEntry]
+    trailing: bytes = b''       # bytes past the last counted entry, if any
+    _name_raw: bytes | None = field(default=None, repr=False)
+
+    def values(self, lang: int | None = 1) -> list[str]:
+        """Just the strings, optionally restricted to one language code."""
+        return [e.value for e in self.entries if lang is None or e.lang == lang]
+
+    def __getitem__(self, i: int) -> str:
+        return self.entries[i].value
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+
+def parse_str(data: bytes) -> StrResource:
+    """Parse a STR#, TTAs, or CTSS resource (must already be decompressed)."""
+    if len(data) < 68:
+        raise ValueError(f"STR# data too short ({len(data)} bytes)")
+    fmt, count = struct.unpack_from('<HH', data, 64)
+    if fmt not in (STR_FMT_WITH_DESC, STR_FMT_NO_DESC):
+        raise ValueError(f"Unsupported STR# format 0x{fmt:04X}")
+
+    entries: list[StrEntry] = []
+    pos = 68
+    for i in range(count):
+        if pos >= len(data):
+            raise ValueError(f"STR# truncated: {i} of {count} entries read")
+        lang = data[pos]
+        pos += 1
+        value, pos = _read_cstring(data, pos)
+        if fmt == STR_FMT_WITH_DESC:
+            desc, pos = _read_cstring(data, pos)
+        else:
+            desc = ''
+        entries.append(StrEntry(lang, value, desc))
+
+    return StrResource(_read_name64(data), fmt, entries, data[pos:], data[:64])
+
+
+def _read_cstring(data: bytes, pos: int) -> tuple[str, int]:
+    end = data.find(b'\x00', pos)
+    if end < 0:
+        raise ValueError("unterminated string in STR# resource")
+    return data[pos:end].decode('latin-1', 'replace'), end + 1
+
+
+def build_str(res: StrResource) -> bytes:
+    """Serialize a StrResource. Inverse of parse_str."""
+    out = bytearray(_emit_name64(res.name, res._name_raw))
+    out += struct.pack('<HH', res.format, len(res.entries))
+    for e in res.entries:
+        out += bytes([e.lang]) + e.value.encode('latin-1', 'replace') + b'\x00'
+        if res.format == STR_FMT_WITH_DESC:
+            out += e.desc.encode('latin-1', 'replace') + b'\x00'
+    return bytes(out + res.trailing)
+
+
+# ---- TTAB --------------------------------------------------------------------
+
+# version -> (entry size, offset of the TTAs index within an entry).
+# v0x4F carries a 28-byte motive-advertisement block at +4 that v0x54 drops.
+TTAB_LAYOUTS = {0x4F: (74, 36), 0x54: (54, 8)}
+
+
+@dataclass
+class TtabEntry:
+    """One interaction. Unnamed fields stay in `raw` so edits are surgical."""
+    raw: bytearray
+    _ttas_offset: int = field(repr=False, default=8)
+
+    @property
+    def action(self) -> int:
+        return struct.unpack_from('<H', self.raw, 0)[0]
+
+    @action.setter
+    def action(self, v: int) -> None:
+        struct.pack_into('<H', self.raw, 0, v)
+
+    @property
+    def guard(self) -> int:
+        return struct.unpack_from('<H', self.raw, 2)[0]
+
+    @guard.setter
+    def guard(self, v: int) -> None:
+        struct.pack_into('<H', self.raw, 2, v)
+
+    @property
+    def ttas_index(self) -> int:
+        return struct.unpack_from('<I', self.raw, self._ttas_offset)[0]
+
+    @ttas_index.setter
+    def ttas_index(self, v: int) -> None:
+        struct.pack_into('<I', self.raw, self._ttas_offset, v)
+
+    def __str__(self) -> str:
+        return (f"action=0x{self.action:04X} guard=0x{self.guard:04X} "
+                f"ttas={self.ttas_index}")
+
+
+@dataclass
+class Ttab:
+    name: str
+    version: int
+    entries: list[TtabEntry]
+    trailing_name: str = 'Interaction Table'
+    _name_raw: bytes | None = field(default=None, repr=False)
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+
+def parse_ttab(data: bytes) -> Ttab:
+    """Parse a TTAB (interaction table). Handles versions 0x4F and 0x54."""
+    if len(data) < 78:
+        raise ValueError(f"TTAB data too short ({len(data)} bytes)")
+    _marker, version, _zero, count = struct.unpack_from('<IIIH', data, 64)
+    if version not in TTAB_LAYOUTS:
+        raise ValueError(
+            f"Unsupported TTAB version 0x{version:X} (known: "
+            + ", ".join(f"0x{v:X}" for v in TTAB_LAYOUTS) + ")")
+    size, ttas_off = TTAB_LAYOUTS[version]
+
+    end = 78 + count * size
+    if end + 4 > len(data):
+        raise ValueError(
+            f"TTAB truncated: {count} x {size}-byte entries need {end} bytes, "
+            f"resource is {len(data)}")
+
+    entries = [TtabEntry(bytearray(data[78 + i * size: 78 + (i + 1) * size]), ttas_off)
+               for i in range(count)]
+
+    name_len, = struct.unpack_from('<I', data, end)
+    trailing = data[end + 4: end + 4 + name_len].decode('latin-1', 'replace')
+    return Ttab(_read_name64(data), version, entries, trailing, data[:64])
+
+
+def build_ttab(t: Ttab) -> bytes:
+    """Serialize a Ttab. Inverse of parse_ttab."""
+    size, _ = TTAB_LAYOUTS[t.version]
+    out = bytearray(_emit_name64(t.name, t._name_raw))
+    out += struct.pack('<IIIH', 0xFFFFFFFF, t.version, 0, len(t.entries))
+    for e in t.entries:
+        if len(e.raw) != size:
+            raise ValueError(
+                f"entry is {len(e.raw)} bytes, TTAB v0x{t.version:X} needs {size}")
+        out += e.raw
+    raw = t.trailing_name.encode('latin-1', 'replace')
+    return bytes(out + struct.pack('<I', len(raw)) + raw)
+
+
+# ---- OBJf --------------------------------------------------------------------
+
+# Only the slots confirmed against a donor are named; see the module docstring.
+# Unnamed slots print as "function N" rather than risk a wrong label.
+OBJF_SLOTS = {0: 'init', 1: 'main'}
+
+
+@dataclass
+class ObjfEntry:
+    guard: int
+    action: int
+
+
+@dataclass
+class Objf:
+    """Object function table: fixed-length list of (guard, action) tree ids."""
+    filename: str
+    entries: list[ObjfEntry]
+    header: bytes = b'\x00' * 8      # the two u32s before the signature
+    _name_raw: bytes | None = field(default=None, repr=False)
+
+    def slot_name(self, i: int) -> str:
+        return OBJF_SLOTS.get(i, f'function {i}')
+
+    def used(self) -> list[tuple[int, ObjfEntry]]:
+        """Slots that actually point at a tree — most of the table is empty."""
+        return [(i, e) for i, e in enumerate(self.entries) if e.action or e.guard]
+
+
+def parse_objf(data: bytes) -> Objf:
+    """Parse an OBJf (object function table)."""
+    if len(data) < 80:
+        raise ValueError(f"OBJf data too short ({len(data)} bytes)")
+    sig, count = struct.unpack_from('<II', data, 72)
+    if sig != TYPE_OBJF:
+        raise ValueError(f"bad OBJf signature 0x{sig:08X} at +72")
+    expected = 80 + count * 4
+    if expected != len(data):
+        raise ValueError(
+            f"OBJf count {count} implies {expected} bytes, resource is {len(data)}")
+
+    entries = [ObjfEntry(*struct.unpack_from('<HH', data, 80 + i * 4))
+               for i in range(count)]
+    return Objf(_read_name64(data), entries, data[64:72], data[:64])
+
+
+def build_objf(o: Objf) -> bytes:
+    """Serialize an Objf. Inverse of parse_objf."""
+    out = bytearray(_emit_name64(o.filename, o._name_raw))
+    out += o.header
+    out += struct.pack('<II', TYPE_OBJF, len(o.entries))
+    for e in o.entries:
+        out += struct.pack('<HH', e.guard, e.action)
+    return bytes(out)
+
+
+# ---- OBJD --------------------------------------------------------------------
+
+OBJD_WORD_COUNT = 108
+
+# word index -> attribute name, for the fields we have confirmed. GUID-style
+# pairs are exposed separately below as combined 32-bit properties.
+OBJD_FIELDS = {
+    'version': 0,
+    'ttab_id': 7,
+    'obj_type': 9,
+    'price': 18,
+    'room_sort_flags': 39,
+    'function_sort_flags': 40,
+    'ctss_id': 41,
+    'attr_count': 58,
+}
+
+
+@dataclass
+class Objd:
+    """Object definition. `words` is the source of truth; the named
+    properties are typed views onto it."""
+    filename: str
+    words: list[int]
+    name: str
+    _name_raw: bytes | None = field(default=None, repr=False)
+
+    def __getattr__(self, attr: str) -> int:
+        # Only reached for names not found normally, so dataclass fields win.
+        if attr in OBJD_FIELDS:
+            return self.words[OBJD_FIELDS[attr]]
+        raise AttributeError(attr)
+
+    def __setattr__(self, attr: str, value) -> None:
+        if attr in OBJD_FIELDS:
+            self.words[OBJD_FIELDS[attr]] = value & 0xFFFF
+        else:
+            object.__setattr__(self, attr, value)
+
+    def _u32(self, lo_word: int) -> int:
+        return self.words[lo_word] | (self.words[lo_word + 1] << 16)
+
+    def _set_u32(self, lo_word: int, v: int) -> None:
+        self.words[lo_word] = v & 0xFFFF
+        self.words[lo_word + 1] = (v >> 16) & 0xFFFF
+
+    @property
+    def guid(self) -> int:
+        return self._u32(14)
+
+    @guid.setter
+    def guid(self, v: int) -> None:
+        self._set_u32(14, v)
+
+    @property
+    def job_guid(self) -> int:
+        return self._u32(52)
+
+    @job_guid.setter
+    def job_guid(self, v: int) -> None:
+        self._set_u32(52, v)
+
+    @property
+    def original_guid(self) -> int:
+        return self._u32(70)
+
+    @original_guid.setter
+    def original_guid(self, v: int) -> None:
+        self._set_u32(70, v)
+
+    def __str__(self) -> str:
+        return (f'OBJD "{self.name}"  guid=0x{self.guid:08X}  '
+                f'ver={self.version}  type={self.obj_type}  price={self.price}  '
+                f'ttab={self.ttab_id}  ctss={self.ctss_id}  '
+                f'attrs={self.attr_count}')
+
+
+def parse_objd(data: bytes) -> Objd:
+    """Parse an OBJD (object definition)."""
+    end = 64 + OBJD_WORD_COUNT * 2
+    if len(data) < end + 4:
+        raise ValueError(f"OBJD data too short ({len(data)} bytes)")
+    words = list(struct.unpack_from(f'<{OBJD_WORD_COUNT}H', data, 64))
+    name_len, = struct.unpack_from('<I', data, end)
+    name = data[end + 4: end + 4 + name_len].decode('latin-1', 'replace')
+    return Objd(_read_name64(data), words, name, data[:64])
+
+
+def build_objd(o: Objd) -> bytes:
+    """Serialize an Objd. Inverse of parse_objd."""
+    if len(o.words) != OBJD_WORD_COUNT:
+        raise ValueError(f"OBJD needs {OBJD_WORD_COUNT} words, got {len(o.words)}")
+    raw = o.name.encode('latin-1', 'replace')
+    return (_emit_name64(o.filename, o._name_raw)
+            + struct.pack(f'<{OBJD_WORD_COUNT}H', *o.words)
+            + struct.pack('<I', len(raw)) + raw)
+
+
+# ---- dispatch ----------------------------------------------------------------
+
+# type id -> (parser, builder). STR#/TTAs/CTSS share one string-table format.
+PARSERS = {
+    TYPE_STR: (parse_str, build_str),
+    TYPE_TTAS: (parse_str, build_str),
+    TYPE_CTSS: (parse_str, build_str),
+    TYPE_TTAB: (parse_ttab, build_ttab),
+    TYPE_OBJF: (parse_objf, build_objf),
+    TYPE_OBJD: (parse_objd, build_objd),
+}
+
+
+def parse_resource(type_id: int, data: bytes):
+    """Parse any resource this module understands, or raise KeyError."""
+    return PARSERS[type_id][0](data)
+
+
+def build_resource(type_id: int, obj) -> bytes:
+    return PARSERS[type_id][1](obj)
+
+
+# ---- self-test ---------------------------------------------------------------
+
+def _selftest(sample_dir: str = 'sample-packages') -> int:
+    """Round-trip every parseable resource in every sample package.
+
+    A parser that silently drops bytes is worse than no parser, so the bar
+    here is byte-identical output, not "it parsed without raising".
+    """
+    from pathlib import Path
+    import s2parser
+
+    ok = skipped = 0
+    failures: list[str] = []
+    packages = sorted(Path(sample_dir).glob('*.package'))
+    if not packages:
+        print(f"no packages found in {sample_dir}/")
+        return 1
+
+    for path in packages:
+        try:
+            header, entries = s2parser.open_package(path)
+        except Exception as exc:
+            failures.append(f"{path.name}: cannot open ({exc})")
+            continue
+        with open(path, 'rb') as f:
+            for e in entries:
+                if e.type_id not in PARSERS:
+                    continue
+                data = s2parser.read_resource(f, e)
+                label = f"{path.name} {e.type_name} i={e.instance_id2:08x}"
+                try:
+                    obj = parse_resource(e.type_id, data)
+                except ValueError as exc:
+                    skipped += 1
+                    failures.append(f"{label}: {exc}")
+                    continue
+                rebuilt = build_resource(e.type_id, obj)
+                if rebuilt == data:
+                    ok += 1
+                else:
+                    failures.append(
+                        f"{label}: round-trip differs "
+                        f"({len(data)} -> {len(rebuilt)} bytes, "
+                        f"first diff at {_first_diff(data, rebuilt)})")
+
+    print(f"round-trip: {ok} resource(s) byte-identical across "
+          f"{len(packages)} package(s)")
+    for msg in failures:
+        print(f"  FAIL {msg}")
+    return 1 if failures else 0
+
+
+def _first_diff(a: bytes, b: bytes) -> int | str:
+    for i in range(min(len(a), len(b))):
+        if a[i] != b[i]:
+            return i
+    return 'length only'
+
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(_selftest(*sys.argv[1:]))

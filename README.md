@@ -182,7 +182,8 @@ the app trivially incapable of corrupting a save).
 | `s2luastate.py` | Per-sim Lua state tables (`0x3053CF74`): Open for Business perks and unspent perk points, and Pets learned behaviors |
 | `s2savediff.py` | Snapshots a save and diffs two snapshots by package, resource, and byte — the "where does the game keep X?" tool. `python3 s2savediff.py snap before` / `diff before after --minus …` |
 | `careers.json` | Career/major GUID → name and per-level job titles, harvested from the game's own `objects.package` files (base + every EP) |
-| `s2writer.py` / `s2object.py` | DBPF *writer* and resource builders (BHAV, TTAB, OBJD…) used by companion projects that generate custom objects |
+| `s2writer.py` | DBPF *writer* — emits uncompressed v1.1 / index 7.2 packages, plus `read_all_resources()` for read-modify-write editing |
+| `s2object.py` | Object resource **parsers and builders** — STR#/TTAs/CTSS, TTAB (v0x4F and v0x54), OBJf, OBJD, and a BHAV assembler. Every parser round-trips byte-for-byte against the donors in `sample-packages/`: `python3 s2object.py` |
 | `SimBrowser/` | The SwiftUI app ([its own README](SimBrowser/README.md)) |
 | `sim_browser.py` | Legacy tkinter prototype — superseded by the app |
 
