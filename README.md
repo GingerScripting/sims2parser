@@ -226,6 +226,7 @@ the app trivially incapable of corrupting a save).
 | `careers.json` | Career/major GUID → name and per-level job titles, harvested from the game's own `objects.package` files (base + every EP) |
 | `s2writer.py` | DBPF *writer* — emits uncompressed v1.1 / index 7.2 packages, plus `read_all_resources()` for read-modify-write editing |
 | `s2object.py` | Object resource **parsers and builders** — STR#/TTAs/CTSS, TTAB (v0x4F and v0x54), OBJf, OBJD, and a BHAV assembler. Every parser round-trips byte-for-byte against the donors in `sample-packages/`: `python3 s2object.py` |
+| `s2clone.py` | **Object cloning** — the SimPE Object Workshop step. Gives a donor object a new GUID and rewrites every reference that pointed at the old one, including GUID literals buried in BHAV operands. `python3 s2clone.py donor.package new.package --name "My Thing"` |
 | `SimBrowser/` | The SwiftUI app ([its own README](SimBrowser/README.md)) |
 | `sim_browser.py` | Legacy tkinter prototype — superseded by the app |
 
