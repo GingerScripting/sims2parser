@@ -19,6 +19,11 @@ import s2parser
 HEADER_SIZE = 96
 INDEX_ENTRY_SIZE = 24  # index v7.2: type, group, instance, instance_hi, offset, size
 
+# Directory of compressed files. Since write_package() emits everything
+# uncompressed, this must be dropped: a stale DIR tells the game to
+# decompress resources that are no longer compressed.
+TYPE_DIR = 0xE86B1EEF
+
 
 @dataclass
 class Resource:
@@ -37,7 +42,14 @@ class Resource:
 
 
 def write_package(path: Path | str, resources: list[Resource]) -> None:
-    """Serialize resources into a DBPF v1.1 / index 7.2 package file."""
+    """Serialize resources into a DBPF v1.1 / index 7.2 package file.
+
+    Any DIR resource is dropped: everything here is written uncompressed, so
+    a carried-over directory would point the game at compression that is no
+    longer there.
+    """
+    resources = [r for r in resources if r.type_id != TYPE_DIR]
+
     seen: set[tuple[int, int, int, int]] = set()
     for r in resources:
         if r.tgi() in seen:
@@ -90,8 +102,7 @@ def _selftest(donor: str) -> None:
     import tempfile
 
     original = read_all_resources(donor)
-    # drop the CLST compression directory: rewritten copy is uncompressed
-    original = [r for r in original if r.type_id != 0xE86AFEB1]
+    original = [r for r in original if r.type_id != TYPE_DIR]
 
     with tempfile.NamedTemporaryFile(suffix=".package", delete=False) as tmp:
         tmp_path = tmp.name

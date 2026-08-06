@@ -13,11 +13,12 @@ from typing import BinaryIO
 
 # Known type IDs (Sims 2)
 TYPE_NAMES = {
+    0x42434F4E: "BCON",
     0x42484156: "BHAV",
     0x424D505F: "BMP_",
     0x43415354: "CAST",
     0x43504F4C: "CPOL",
-    0x43544353: "CTSS",
+    0x43545353: "CTSS",
     0x46414345: "FACE",
     0x46414D49: "FAMI",
     0x46434E53: "FCNS",
@@ -48,7 +49,8 @@ TYPE_NAMES = {
     0xAC8A7A2E: "IDNO",  # neighborhood ID
     0xEBFEE33F: "PERS",  # person property set (XML)
     0xAC506764: "PGLN",
-    0xE86B1EEF: "BINX",
+    0xE86B1EEF: "DIR",   # directory of compressed files; 20-byte entries
+                         # (type, group, instance, instance_hi, uncompressed size)
     0xED534136: "COLL",
     0xFC4B284B: "TXTR",
     0x0C560F39: "5SC",
