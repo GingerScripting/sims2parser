@@ -217,14 +217,14 @@ the app trivially incapable of corrupting a save).
 
 | File | What it does |
 |------|--------------|
-| `s2parser.py` | DBPF container + QFS/RefPack decompression + BHAV (SimAntics) decompiler. Also a CLI: `python3 s2parser.py --bhav file.package` |
+| `s2parser.py` | DBPF container + QFS/RefPack **compression and decompression** + BHAV (SimAntics) decompiler. Also a CLI: `python3 s2parser.py --bhav file.package` |
 | `s2neighborhood.py` | Turns a neighborhood's packages into JSON: sims, households, lots, family ties, relationships, businesses. `python3 s2neighborhood.py --out sims.json` |
 | `s2ngbh.py` | The neighborhood token store (NGBH): owned businesses with their rank, and every sim's talent badges |
 | `s2luastate.py` | Per-sim Lua state tables (`0x3053CF74`): Open for Business perks and unspent perk points, and Pets learned behaviors |
 | `s2savediff.py` | Snapshots a save and diffs two snapshots by package, resource, and byte — the "where does the game keep X?" tool. `python3 s2savediff.py snap before` / `diff before after --minus …` |
 | `s2doctor.py` | Freeze/glitch diagnostic — reads the game's own error logs, scans Downloads for damaged packages and overlapping overrides, and cross-references the two. `python3 s2doctor.py` |
 | `careers.json` | Career/major GUID → name and per-level job titles, harvested from the game's own `objects.package` files (base + every EP) |
-| `s2writer.py` | DBPF *writer* — emits uncompressed v1.1 / index 7.2 packages, plus `read_all_resources()` for read-modify-write editing |
+| `s2writer.py` | DBPF *writer* — emits v1.1 / index 7.2 packages, stored or QFS-compressed with a matching DIR, plus `read_all_resources()` for read-modify-write editing |
 | `s2object.py` | Object resource **parsers and builders** — STR#/TTAs/CTSS, TTAB (v0x4F and v0x54), OBJf, OBJD, and a BHAV assembler. Every parser round-trips byte-for-byte against the donors in `sample-packages/`: `python3 s2object.py` |
 | `s2clone.py` | **Object cloning** — the SimPE Object Workshop step. Gives a donor object a new GUID and rewrites every reference that pointed at the old one, including GUID literals buried in BHAV operands. `python3 s2clone.py donor.package new.package --name "My Thing"` |
 | `SimBrowser/` | The SwiftUI app ([its own README](SimBrowser/README.md)) |
