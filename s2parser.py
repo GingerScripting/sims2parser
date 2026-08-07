@@ -41,7 +41,11 @@ TYPE_NAMES = {
     0x584F424A: "XOBJ",
     0x6B6A4453: "kjDS",
     0xAACE2EFB: "SDSC",  # Sim Description (neighborhood packages)
-    0xAC4F8687: "LIFO",
+    0xAC4F8687: "GMDC",  # cGeometryDataContainer — mesh vertex/face data
+    0x7BA3838C: "GMND",  # cGeometryNode
+    0xFC6EB1F7: "SHPE",  # cShape
+    0xE519C933: "CRES",  # cResourceNode — scenegraph root
+    0xFB00791E: "ANIM",  # cAnimResourceConst
     0xCC364C2A: "SREL",  # sim-to-sim relationship
     0x0BF999E7: "LTXT",  # lot description
     0x8C870743: "FAMT",  # family ties
@@ -51,14 +55,14 @@ TYPE_NAMES = {
     0xAC506764: "PGLN",
     0xE86B1EEF: "DIR",   # directory of compressed files; 20-byte entries
                          # (type, group, instance, instance_hi, uncompressed size)
-    0xED534136: "COLL",
+    0xED534136: "LIFO",  # cLevelInfo — one mip level held outside its TXTR
     0xFC4B284B: "TXTR",
-    0x0C560F39: "5SC",
-    0xC9C81B9B: "NHTG",
+    0x0C560F39: "cGZPropertySet",   # binary property list, not an RCOL
+    0xC9C81B9B: "cAmbientLight",
     # graphics / object types common in CC packages
     0x1C4A276C: "TXTR",  # texture resource
     0x49596978: "TXMT",  # material definition
-    0x4C697E5A: "LIFO",  # level-of-detail image
+    0x4C697E5A: "cGZPropertySet",   # binary property list, not an image
     0xCCA8E925: "MMAT",  # material override
 }
 
