@@ -196,6 +196,171 @@ def read_resource(f: BinaryIO, entry: ResourceEntry) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# QFS / RefPack compression (Maxis variant used in DBPF packages)
+# ---------------------------------------------------------------------------
+
+# A QFS stream is a 9-byte header then a sequence of control codes. Every
+# limit below is read straight off qfs_decompress's bit expressions, which is
+# the only definition of the format that matters here — the encoder's job is
+# to emit codes that decoder turns back into the original bytes.
+#
+#   b < 0x80   2 bytes  copy 3..10   offset <= 1024     0..3 literals
+#   b < 0xC0   3 bytes  copy 4..67   offset <= 16384    0..3 literals
+#   b < 0xE0   4 bytes  copy 5..1028 offset <= 131072   0..3 literals
+#   b < 0xFC   1 byte   literal run of 4..112, always a multiple of 4
+#   else       1 byte   end of stream, plus 0..3 trailing literals
+#
+# Note the asymmetry that shapes the whole encoder: a control code carries at
+# most 3 literals, and the bulk literal run only moves multiples of 4. So a
+# pending run of L literals is emitted as L//4*4 bytes of run codes with the
+# remaining L%4 riding along on the next control — which always fits, because
+# a remainder is 0..3 by construction.
+
+QFS_MAGIC = b'\x10\xfb'
+QFS_HEADER_SIZE = 9
+QFS_MAX_UNCOMPRESSED = 0xFFFFFF   # the header's size field is 3 bytes
+
+_QFS_MAX_RUN = 112                # (0xFB & 0x1F) + 1 == 28, times 4
+_QFS_MAX_MATCH = 1028             # 0x3FF + 5, from the 4-byte control
+
+
+def _qfs_encode_match(out: bytearray, offset: int, length: int,
+                      literals: bytes) -> None:
+    """Append one match control code, carrying 0..3 literals ahead of it."""
+    n_lit = len(literals)
+    o = offset - 1
+    if offset <= 1024 and 3 <= length <= 10:
+        out.append(((o >> 8) << 5) | ((length - 3) << 2) | n_lit)
+        out.append(o & 0xFF)
+    elif offset <= 16384 and 4 <= length <= 67:
+        out.append(0x80 | (length - 4))
+        out.append((n_lit << 6) | (o >> 8))
+        out.append(o & 0xFF)
+    elif offset <= 131072 and 5 <= length <= _QFS_MAX_MATCH:
+        ln = length - 5
+        out.append(0xC0 | ((o >> 16) << 4) | ((ln >> 8) << 2) | n_lit)
+        out.append((o >> 8) & 0xFF)
+        out.append(o & 0xFF)
+        out.append(ln & 0xFF)
+    else:
+        raise ValueError(f"unencodable match: offset={offset} length={length}")
+    out += literals
+
+
+def _qfs_usable(offset: int, length: int) -> int:
+    """Longest encodable copy for this offset, or 0 if no control code fits.
+
+    The three controls overlap into one contiguous run of lengths per offset
+    band, so only the shortest encodable match varies:
+
+        offset <=   1024  ->  3..1028   (all three controls)
+        offset <=  16384  ->  4..1028   (3-byte and 4-byte)
+        offset <= 131072  ->  5..1028   (4-byte only)
+
+    Short matches at long range are simply not expressible — a 3-byte match
+    needs the 2-byte control and so a near offset. Those are rejected here
+    and stay literals.
+    """
+    if offset <= 1024:
+        shortest = 3
+    elif offset <= 16384:
+        shortest = 4
+    elif offset <= 131072:
+        shortest = 5
+    else:
+        return 0
+    return min(length, _QFS_MAX_MATCH) if length >= shortest else 0
+
+
+def _qfs_flush_literals(out: bytearray, data: bytes, start: int,
+                        count: int) -> int:
+    """Emit count//4*4 literals as run codes; return how many are left over."""
+    remaining = count
+    pos = start
+    while remaining >= 4:
+        chunk = min(remaining - remaining % 4, _QFS_MAX_RUN)
+        out.append(0xE0 + (chunk // 4 - 1))
+        out += data[pos:pos + chunk]
+        pos += chunk
+        remaining -= chunk
+    return remaining
+
+
+def qfs_compress(data: bytes, *, chain_depth: int = 48) -> bytes:
+    """Compress bytes into a QFS stream that qfs_decompress reverses exactly.
+
+    Greedy LZ77 over a hash chain of 3-byte prefixes. `chain_depth` trades
+    ratio for time; the default keeps whole-package compression quick while
+    landing close to Maxis's own output.
+    """
+    n = len(data)
+    if n > QFS_MAX_UNCOMPRESSED:
+        raise ValueError(
+            f"{n} bytes exceeds the QFS limit of {QFS_MAX_UNCOMPRESSED}")
+
+    out = bytearray(QFS_HEADER_SIZE)
+    head: dict[bytes, int] = {}
+    prev = [-1] * n
+
+    lit_start = 0   # first byte not yet emitted
+    pos = 0
+    while pos < n:
+        best_len = 0
+        best_off = 0
+
+        if pos + 3 <= n:
+            key = data[pos:pos + 3]
+            cand = head.get(key, -1)
+            depth = 0
+            limit = min(n - pos, _QFS_MAX_MATCH)
+            while cand >= 0 and depth < chain_depth:
+                offset = pos - cand
+                if offset > 131072:
+                    break
+                if best_len >= limit:
+                    break   # already at the cap; nothing can beat it
+                # Quick reject: a candidate can only win by being longer.
+                if best_len == 0 or data[cand + best_len] == data[pos + best_len]:
+                    length = 0
+                    while length < limit and data[cand + length] == data[pos + length]:
+                        length += 1
+                    usable = _qfs_usable(offset, length)
+                    if usable > best_len:
+                        best_len, best_off = usable, offset
+                cand = prev[cand]
+                depth += 1
+
+        if best_len >= 3:
+            pending = pos - lit_start
+            leftover = _qfs_flush_literals(out, data, lit_start, pending)
+            _qfs_encode_match(out, best_off, best_len,
+                              data[pos - leftover:pos])
+            # Index every position the match covers, so later searches see them.
+            for i in range(pos, min(pos + best_len, n - 2)):
+                k = data[i:i + 3]
+                prev[i] = head.get(k, -1)
+                head[k] = i
+            pos += best_len
+            lit_start = pos
+        else:
+            if pos + 3 <= n:
+                k = data[pos:pos + 3]
+                prev[pos] = head.get(k, -1)
+                head[k] = pos
+            pos += 1
+
+    # Tail: bulk literals, then the terminator carrying the last 0..3 bytes.
+    leftover = _qfs_flush_literals(out, data, lit_start, n - lit_start)
+    out.append(0xFC + leftover)
+    out += data[n - leftover:] if leftover else b''
+
+    struct.pack_into('<I', out, 0, len(out))
+    out[4:6] = QFS_MAGIC
+    out[6:9] = n.to_bytes(3, 'big')
+    return bytes(out)
+
+
+# ---------------------------------------------------------------------------
 # QFS / RefPack decompression (Maxis variant used in DBPF packages)
 # ---------------------------------------------------------------------------
 
@@ -547,6 +712,67 @@ def cmd_list(path: Path):
         print(f"  [{i:4d}]  {e.tgi()}  @ 0x{e.offset:08x}  size={e.size}")
 
 
+def cmd_qfs_selftest(sample_dir: Path) -> int:
+    """Recompress every real QFS payload and check it decodes back exactly.
+
+    Maxis's own compressed resources are the only ground truth available, so
+    the test is: decode theirs, re-encode with ours, decode that, compare.
+    Edge cases the corpus may not cover are pinned by the synthetic cases.
+    """
+    import os
+
+    failures = []
+
+    # Boundaries that separate the four control codes, plus the cases that
+    # broke earlier versions: matches too far for a short control, runs
+    # longer than one code can hold, and lengths either side of a multiple
+    # of four (only whole quads fit in a bulk literal run).
+    synthetic = {
+        'empty': b'', 'one': b'A', 'three': b'ABC', 'four': b'ABCD',
+        'seven': b'ABCDEFG',
+        'rle': b'A' * 5000,
+        'overlapping': b'AB' * 600,
+        'match past 1024': b'ABCDE' + os.urandom(2000) + b'ABCDE',
+        'match past 16384': b'ABCDEF' + os.urandom(20000) + b'ABCDEF',
+        'match past 131072': b'ABCDEF' + os.urandom(140000) + b'ABCDEF',
+        'incompressible': os.urandom(50000),
+        'match past 1028': b'Z' * 3000 + b'Z' * 3000,
+        'every byte value': bytes(range(256)) * 40,
+        'zeros': bytes(100000),
+    }
+    for name, blob in synthetic.items():
+        if qfs_decompress(qfs_compress(blob)) != blob:
+            failures.append(f'synthetic: {name}')
+
+    count = total = packed = 0
+    for path in sorted(Path(sample_dir).glob('*.package')):
+        try:
+            header, entries = open_package(path)
+        except Exception:
+            continue
+        with open(path, 'rb') as f:
+            for e in entries:
+                f.seek(e.offset)
+                raw = f.read(e.size)
+                if len(raw) < QFS_HEADER_SIZE or raw[4:6] != QFS_MAGIC:
+                    continue
+                plain = qfs_decompress(raw)
+                mine = qfs_compress(plain)
+                if qfs_decompress(mine) != plain:
+                    failures.append(f'{path.name} {e.type_name} i={e.instance:08x}')
+                count += 1
+                total += len(plain)
+                packed += len(mine)
+
+    if count:
+        print(f'qfs: {count} real payloads recompressed, {total:,} bytes '
+              f'-> {packed:,} ({packed / total:.1%})')
+    print(f'qfs: {len(synthetic)} synthetic cases')
+    for msg in failures:
+        print(f'  FAIL {msg}')
+    return 1 if failures else 0
+
+
 def cmd_bhav(path: Path, flat: bool = False):
     """Decode and print all BHAVs in a package."""
     header, entries = open_package(path)
@@ -593,7 +819,12 @@ if __name__ == "__main__":
     ap.add_argument("files", nargs="+", metavar="FILE")
     ap.add_argument("--bhav", action="store_true", help="Decode BHAV resources")
     ap.add_argument("--flat", action="store_true", help="Flat instruction list instead of tree (use with --bhav)")
+    ap.add_argument("--qfs-selftest", action="store_true",
+                    help="Recompress every QFS payload under FILE (a directory) and verify it")
     args = ap.parse_args()
+
+    if args.qfs_selftest:
+        sys.exit(max(cmd_qfs_selftest(Path(f)) for f in args.files))
 
     for f in args.files:
         p = Path(f)
