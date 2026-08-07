@@ -104,13 +104,28 @@ class RcolBlock:
 def parse_rcol(data: bytes) -> tuple[list[RcolBlock], int]:
     """Read an RCOL header. Returns its blocks and the offset after the last
     block header — only the first block's payload can be located this way,
-    since block payloads are variable length and self-delimiting."""
+    since block payloads are variable length and self-delimiting.
+
+    Two header forms occur. The common one opens with the version marker
+    0xFFFF0001 and then the link count; the other omits the version entirely
+    and opens with the link count itself. Both appear in the game's own
+    textures (CAS!.package and objects.package use the short form), so the
+    marker is treated as optional rather than required.
+    """
     if len(data) < 12:
         raise ValueError(f'too short for RCOL ({len(data)} bytes)')
-    magic, links = struct.unpack_from('<II', data, 0)
-    if magic != RCOL_MAGIC:
-        raise ValueError(f'not an RCOL (magic 0x{magic:08X})')
-    pos = 8 + links * 16
+    magic, = struct.unpack_from('<I', data, 0)
+    if magic == RCOL_MAGIC:
+        links, = struct.unpack_from('<I', data, 4)
+        pos = 8
+    else:
+        links = magic
+        pos = 4
+    # Guard the versionless reading: a wild first u32 would otherwise be
+    # trusted as a link count and walk the cursor off into the payload.
+    if links > 0xFFFF:
+        raise ValueError(f'not an RCOL (leading u32 0x{magic:08X})')
+    pos += links * 16
     count, = struct.unpack_from('<I', data, pos)
     pos += 4
     type_ids = [struct.unpack_from('<I', data, pos + i * 4)[0] for i in range(count)]
