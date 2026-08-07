@@ -439,8 +439,8 @@ def _retitle_ctss(resources: list[s2writer.Resource], ctss_id: int,
 def clone_package(src: Path | str, dest: Path | str, *, guid: int | None = None,
                   name: str | None = None, description: str | None = None,
                   price: int | None = None, instance: int | None = None,
-                  select_guid: int | None = None, aggressive: bool = False
-                  ) -> CloneReport:
+                  select_guid: int | None = None, aggressive: bool = False,
+                  compress: bool = False) -> CloneReport:
     """Clone a donor package file into a new object package."""
     resources = s2writer.read_all_resources(src)
     if guid is None:
@@ -448,7 +448,7 @@ def clone_package(src: Path | str, dest: Path | str, *, guid: int | None = None,
     report = clone(resources, guid=guid, name=name, description=description,
                    price=price, instance=instance, select_guid=select_guid,
                    aggressive=aggressive)
-    s2writer.write_package(dest, resources)
+    s2writer.write_package(dest, resources, compress=compress)
     return report
 
 
@@ -598,6 +598,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument('--aggressive', action='store_true',
                     help='also rewrite GUID hits at unconfirmed operand '
                          'offsets — can corrupt a tree, read the warnings first')
+    ap.add_argument('--compress', action='store_true',
+                    help='QFS-compress the output, as normal custom content is')
     ap.add_argument('--check', type=Path, metavar='DIR',
                     help='scan DIR for packages and refuse a GUID already in use')
     ap.add_argument('--selftest', action='store_true',
@@ -633,7 +635,8 @@ def main(argv: list[str] | None = None) -> int:
                                name=args.name, description=args.description,
                                price=args.price, instance=args.instance,
                                select_guid=args.select_guid,
-                               aggressive=args.aggressive)
+                               aggressive=args.aggressive,
+                               compress=args.compress)
     except ValueError as exc:
         print(f'error: {exc}', file=sys.stderr)
         return 1
