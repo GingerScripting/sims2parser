@@ -245,7 +245,7 @@ def _load_neighborhood_data(nbr_dir: Path) -> NeighborhoodData:
                 try:
                     name, table = s2luastate.parse_state_table(read_resource(f, e))
                     if name == s2luastate.TABLE_BUSINESS_REWARDS:
-                        perks_by_nid[e.instance_id2] = s2luastate.sim_perks(table)
+                        perks_by_nid[e.instance] = s2luastate.sim_perks(table)
                 except Exception:
                     pass
                 continue
@@ -257,8 +257,8 @@ def _load_neighborhood_data(nbr_dir: Path) -> NeighborhoodData:
                 if count < 1 or count > 64:
                     continue
                 score = struct.unpack_from('<i', data, 8)[0]
-                sim_a = (e.instance_id2 >> 16) & 0xFFFF
-                sim_b = e.instance_id2 & 0xFFFF
+                sim_a = (e.instance >> 16) & 0xFFFF
+                sim_b = e.instance & 0xFFFF
                 key = (min(sim_a, sim_b), max(sim_a, sim_b))
                 if key not in raw or abs(score) > abs(raw[key]):
                     raw[key] = score

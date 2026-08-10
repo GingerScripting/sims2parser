@@ -658,7 +658,7 @@ def _selftest(sample_dir: str = 'sample-packages') -> int:
                 if e.type_id not in PARSERS:
                     continue
                 data = s2parser.read_resource(f, e)
-                label = f"{path.name} {e.type_name} i={e.instance_id2:08x}"
+                label = f"{path.name} {e.type_name} i={e.instance:08x}"
                 try:
                     obj = parse_resource(e.type_id, data)
                 except ValueError as exc:

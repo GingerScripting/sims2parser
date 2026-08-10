@@ -331,8 +331,8 @@ def load_srel(pkg_path: Path, entries) -> dict[int, list[dict]]:
         for e in entries:
             if e.type_id != TID_SREL:
                 continue
-            owner = (e.instance_id2 >> 16) & 0xFFFF
-            target = e.instance_id2 & 0xFFFF
+            owner = (e.instance >> 16) & 0xFFFF
+            target = e.instance & 0xFFFF
             if owner == target:
                 continue
             d = read_resource(f, e)
@@ -434,8 +434,8 @@ def extract_hood(nbr_dir: Path) -> dict | None:
                 if e.type_id != TID_LTXT:
                     continue
                 try:
-                    lots[e.instance_id2] = parse_ltxt(read_resource(f, e),
-                                                      e.instance_id2)
+                    lots[e.instance] = parse_ltxt(read_resource(f, e),
+                                                      e.instance)
                 except Exception:
                     continue
 
@@ -464,7 +464,7 @@ def extract_hood(nbr_dir: Path) -> dict | None:
                     # Script-side state, one resource per table per sim; the
                     # sim's nid is the high half of the instance id.
                     table = s2luastate.parse_state_table(read_resource(f, e))
-                    lua_state.setdefault(e.instance_id2, []).append(table)
+                    lua_state.setdefault(e.instance, []).append(table)
                 elif e.type_id == TID_FAMT:
                     famt = parse_famt(read_resource(f, e))
                 elif e.type_id == TID_STR and e.group_id == 0xFFFFFFFF:
@@ -474,8 +474,8 @@ def extract_hood(nbr_dir: Path) -> dict | None:
                     # every Greek house and dorm ("Tri-Var Sorority").
                     strs = parse_ctss_strings(read_resource(f, e))
                     if strs and strs[0]:
-                        household_names[e.instance_id2] = strs[0]
-                elif e.type_id == TID_CTSS and e.instance_id2 == 1:
+                        household_names[e.instance] = strs[0]
+                elif e.type_id == TID_CTSS and e.instance == 1:
                     strs = parse_ctss_strings(read_resource(f, e))
                     if strs and strs[0]:
                         hood_name = strs[0]
@@ -487,7 +487,7 @@ def extract_hood(nbr_dir: Path) -> dict | None:
                 continue
             try:
                 d = read_resource(f, e)
-                families[e.instance_id2] = parse_fami(d, e.instance_id2, sim_guids)
+                families[e.instance] = parse_fami(d, e.instance, sim_guids)
             except Exception:
                 continue
 

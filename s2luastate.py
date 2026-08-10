@@ -26,8 +26,8 @@ number is written as whichever of float/int the script side happened to be
 holding, so "Reward Points" comes back 1 on one sim and 1.0 on the next —
 read it through perk_points(), which normalizes.
 
-The resource's instance_id2 is the sim's neighborhood id, the same key
-s2ngbh.sim_badges() returns.
+The resource's instance id (ResourceEntry.instance) is the sim's neighborhood
+id, the same key s2ngbh.sim_badges() returns.
 
 Found by diffing a save before and after buying a single perk in game; see
 s2savediff.py, which is the tool for repeating that trick.
