@@ -24,6 +24,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import s2ltw
 import s2luastate
 import s2ngbh
 from s2parser import open_package, read_resource
@@ -200,6 +201,10 @@ def parse_sdsc(d: bytes) -> dict:
         "career": career_track,
         "career_title": career_title,
         "career_level": career_level,
+        # Career LTWs name their track by GUID, so keep the raw ids alongside
+        # the resolved names — careers.json does not cover every EP track.
+        "career_guid": career_guid,
+        "retired_guid": retired_guid,
         "job_performance": i16(d, 0x8A),
         "retired_career": retired_track,
         "retired_title": retired_title,
@@ -576,7 +581,7 @@ def extract_hood(nbr_dir: Path) -> dict | None:
         s["badges"] = badges.get(nid, {})
         s["perks"] = perks.get(nid, {"points": 0, "perks": {}})
 
-    return {
+    hood = {
         "id": hood_id,
         "name": hood_name,
         "sims": sorted(sims.values(), key=lambda s: (s["last"] or "~", s["first"])),
@@ -584,6 +589,10 @@ def extract_hood(nbr_dir: Path) -> dict | None:
         "businesses": sorted(businesses,
                              key=lambda b: (-(b["rank"] or 0), b["name"])),
     }
+    # Lifetime wants last: the evaluators read the relationships, family ties
+    # and businesses attached above.
+    s2ltw.annotate(hood, ngbh, s2ltw.load_ltws(nbr_dir))
+    return hood
 
 
 def extract_all(root: Path) -> dict:
