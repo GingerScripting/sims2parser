@@ -16,6 +16,7 @@ struct SimDetailView: View {
                 if !sim.bio.isEmpty { bioSection }
                 familySection
                 if !journalMentions.isEmpty { journalSection }
+                if let ltw = sim.ltw { lifetimeWantSection(ltw) }
                 traitsSection
                 if sim.hasBadges { badgesSection }
                 if !householdBusinesses.isEmpty { businessesSection }
@@ -245,6 +246,59 @@ struct SimDetailView: View {
             .frame(width: 90, height: 7)
             Text("\(value / 100)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 18, alignment: .trailing)
+        }
+    }
+
+    // MARK: lifetime want
+
+    private func lifetimeWantSection(_ ltw: LifetimeWant) -> some View {
+        section("Lifetime Want") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(ltw.name).font(.title3).fontWeight(.medium)
+                    if ltw.done { badge("Fulfilled", color: .green) }
+                    Spacer(minLength: 0)
+                }
+
+                if ltw.isMeasured {
+                    HStack(spacing: 10) {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(.quaternary)
+                                Capsule()
+                                    .fill(ltw.done ? Color.green : .accentColor)
+                                    .frame(width: max(0, geo.size.width * ltw.fraction))
+                            }
+                        }
+                        .frame(height: 8)
+                        Text(ltw.tally)
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 74, alignment: .trailing)
+                    }
+                    // The game recomputes progress rather than storing it, so
+                    // say what this number was actually counted from.
+                    Text(ltw.isApproximate ? "\(ltw.basis) — approximate" : ltw.basis)
+                        .font(.caption)
+                        .foregroundStyle(ltw.isApproximate ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
+                } else {
+                    Text("Progress for this want hasn't been decoded — the game "
+                         + "recomputes it on the fly rather than saving it.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if !ltw.detail.isEmpty {
+                    FlowLayout(spacing: 6) {
+                        ForEach(ltw.detail, id: \.self) { name in
+                            Text(name)
+                                .font(.caption)
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(.quaternary.opacity(0.6), in: Capsule())
+                        }
+                    }
+                }
+            }
         }
     }
 
