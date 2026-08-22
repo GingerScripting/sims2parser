@@ -147,7 +147,11 @@ struct ContentView: View {
     @StateObject private var journal = JournalStore()
     @State private var mode: ViewMode = .sims
     @State private var journalSelection: UUID?
-    @State private var hoodID: String?
+    /// Remembered across launches, so the app reopens on the hood you actually
+    /// play rather than whichever one sorts first. Empty before the first pick;
+    /// `hood` falls back to the first hood whenever this matches nothing, which
+    /// also covers a remembered hood that has since been removed or renamed.
+    @AppStorage("lastHoodID") private var hoodID: String = ""
     @State private var search = ""
     @State private var ageFilter = "All"
     @State private var typeFilter: SimTypeFilter = .playable
