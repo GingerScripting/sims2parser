@@ -227,6 +227,7 @@ the app trivially incapable of corrupting a save).
 | `s2writer.py` | DBPF *writer* — emits v1.1 / index 7.2 packages, stored or QFS-compressed with a matching DIR, plus `read_all_resources()` for read-modify-write editing |
 | `s2object.py` | Object resource **parsers and builders** — STR#/TTAs/CTSS, TTAB (v0x4F and v0x54), OBJf, OBJD, and a BHAV assembler. Every parser round-trips byte-for-byte against the donors in `sample-packages/`: `python3 s2object.py` |
 | `s2clone.py` | **Object cloning** — the SimPE Object Workshop step. Gives a donor object a new GUID and rewrites every reference that pointed at the old one, including GUID literals buried in BHAV operands. `python3 s2clone.py donor.package new.package --name "My Thing"` |
+| `s2texture.py` | **Textures** — reads TXTR/LIFO (RCOL scenegraph resources), decodes DXT1/DXT3/DXT5 and the raw formats, and exports PNG with no third-party dependency. `python3 s2texture.py pkg.package --export out/` |
 | `SimBrowser/` | The SwiftUI app ([its own README](SimBrowser/README.md)) |
 | `sim_browser.py` | Legacy tkinter prototype — superseded by the app |
 
