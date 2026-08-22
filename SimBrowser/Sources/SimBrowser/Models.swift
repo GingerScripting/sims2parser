@@ -114,6 +114,38 @@ struct Badge: Decodable, Hashable {
     var levelsEarned: Int { Badge.thresholds.filter { points >= $0.1 }.count }
 }
 
+/// A sim's lifetime want, as `s2ltw.evaluate` writes it.
+///
+/// The game never stores how far along a want is — the aspiration panel
+/// recomputes it from a check-tree BHAV every time it draws — so `progress` is
+/// reconstructed from the save and is nil for wants nothing has decoded yet.
+/// `confidence` says how much to trust it: "exact" reimplements what the check
+/// tree counts, "approx" is a defensible stand-in, "unknown" means no evaluator.
+struct LifetimeWant: Decodable, Hashable {
+    var name: String
+    var target: Int
+    var progress: Int?
+    var done: Bool
+    /// What the number was counted from, e.g. "level in Adult - Culinary".
+    var basis: String
+    var confidence: String
+    /// The things behind the count — partner names, maxed skills — when the
+    /// evaluator can name them. Empty for the ones that only yield a number.
+    var detail: [String]
+
+    var isMeasured: Bool { progress != nil }
+    var isApproximate: Bool { confidence == "approx" }
+
+    /// 0–1 for a bar, clamped: a sim can overshoot a want they already met.
+    var fraction: Double {
+        guard let progress, target > 0 else { return done ? 1 : 0 }
+        return min(1, max(0, Double(progress) / Double(target)))
+    }
+
+    /// "8 / 20", or "? / 20" where progress could not be reconstructed.
+    var tally: String { "\(progress.map(String.init) ?? "?") / \(target)" }
+}
+
 struct Sim: Decodable, Identifiable, Hashable {
     static func == (lhs: Sim, rhs: Sim) -> Bool { lhs.nid == rhs.nid && lhs.guid == rhs.guid }
     func hash(into hasher: inout Hasher) { hasher.combine(nid); hasher.combine(guid) }
@@ -174,6 +206,8 @@ struct Sim: Decodable, Identifiable, Hashable {
     /// Optional so a sims.json cached by a build that ignored these still decodes.
     var perks: PerkState?
     var badges: [String: Badge]?
+    /// Nil for children and toddlers, who have not been given a want yet.
+    var ltw: LifetimeWant?
     /// Names of the businesses the sim's *household* owns — the parser gives
     /// every member the same list. Which of them this sim personally owns
     /// comes from `Hood.businesses`, which is also the only place the rank is.

@@ -35,8 +35,11 @@ cp "$BIN" "$APP/Contents/MacOS/SimBrowser"
 
 # The Python side rides along inside the bundle, so the app does not care where
 # the repo was cloned. This is the extractor plus its full import closure —
-# careers.json is read relative to s2neighborhood.py, so it has to sit here too.
-for f in s2neighborhood.py s2parser.py s2ngbh.py s2luastate.py careers.json; do
+# careers.json and wants.json are read relative to the module that loads them,
+# so they have to sit here too. Miss one and the app launches fine and then
+# fails at extraction time with a bare ImportError.
+for f in s2neighborhood.py s2parser.py s2ngbh.py s2luastate.py s2ltw.py \
+         careers.json wants.json; do
     cp "../$f" "$APP/Contents/Resources/$f"
 done
 
