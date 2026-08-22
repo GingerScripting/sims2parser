@@ -38,6 +38,12 @@ _MAX_TOKEN_VALUES = 5000    # sanity bound for resync
 
 # --- tokens we read ---------------------------------------------------------
 
+# Sim memories are tokens too — the diary entries the game shows on the memories
+# panel. The token GUID is the memory object's GUID ("Memory - Love - WooHoo" and
+# friends, findable by OBJD name in the game's objects.package); these two value
+# slots say who it is about.
+MEMORY_OWNER, MEMORY_SUBJECT = 4, 12
+
 # "Token - Remote Business Data": one per business the household owns, kept on
 # the household so the neighborhood can show a rank without loading the lot.
 TOKEN_REMOTE_BUSINESS = 0x108F47DF
@@ -189,6 +195,28 @@ def households_businesses(ngbh: dict) -> dict[int, list[dict]]:
             record = parse_business_token(values)
             if record:
                 out.setdefault(family_id, []).append(record)
+    return out
+
+
+def sim_memories(ngbh: dict, nid: int, guids=None) -> list[dict]:
+    """A sim's *own* memories: [{'guid', 'subject', 'values'}, …].
+
+    A sim's token group also carries memories owned by other sims — gossip, the
+    events they witnessed — so filtering on the owner slot is not optional. Ask
+    Ripp Grunt for his WooHoo memories without it and you also get the time he
+    walked in on the Landgraabs.
+
+    Memories about nobody in particular ("Maxed 7 Skills") stop one slot short
+    and get subject None, so the subject slot cannot be required.
+    """
+    out = []
+    for guid, values in ngbh["sims"].get(nid, []):
+        if guids is not None and guid not in guids:
+            continue
+        if len(values) <= MEMORY_OWNER or values[MEMORY_OWNER] != nid:
+            continue
+        subject = values[MEMORY_SUBJECT] if len(values) > MEMORY_SUBJECT else None
+        out.append({"guid": guid, "subject": subject, "values": list(values)})
     return out
 
 

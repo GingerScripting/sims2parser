@@ -1,0 +1,572 @@
+{
+ "lifetime_wants": {
+  "0x0E956081": {
+   "name": "Become Icon",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Icon",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x0EB8C43B": {
+   "name": "Become a Superhero",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Superhero",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x107D1CB5": {
+   "name": "Own X number of top level businesses",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Own X Max Rank Businesses",
+   "folder": "EP3Lifetime",
+   "score": 25000,
+   "influence": 0
+  },
+  "0x2E956206": {
+   "name": "Have $int Simultaneous Best Friends",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Simultaneous Best Friends",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x31B02406": {
+   "name": "Raise X Puppies or Kittens",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Raise Puppy Kittens",
+   "folder": "EP4Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0x31B0246C": {
+   "name": "Have X Pets Reach the Top of their Careers",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Top of Pet Career",
+   "folder": "EP4Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0x324CF001": {
+   "name": "Become a Space Pirate",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Adventurer",
+   "folder": "EP5Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0x324CF263": {
+   "name": "Become the Education Minister",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Education",
+   "folder": "EP5Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0x4E955FFF": {
+   "name": "Become Cult Leader",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Cult Leader",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x4E95602D": {
+   "name": "Become a General",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - General",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x4E95603D": {
+   "name": "Become a Hall of Famer",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Hall of Famer",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x4E9560A9": {
+   "name": "Become a Supervillian",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Criminal Mastermind",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x4E95624E": {
+   "name": "Have $int Simultaneous Lovers",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Simultaneous Lovers",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x6E956095": {
+   "name": "Become Mayor",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Mayor",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x6E95612B": {
+   "name": "Have $int Grandchildren",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Lots of Grandchildren",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x6EB8C463": {
+   "name": "Become Mad Scientist",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Mad Scientist",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x8E956054": {
+   "name": "Become Hospital COS",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Hospital Chief of Staff",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x8E9560D8": {
+   "name": "Become a Visionary",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Visionary",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x8E9560EB": {
+   "name": "Earn $int Simolens",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Lots of Money",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x8E9562DA": {
+   "name": "WooHoo with $int Different Sims",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Woohoo",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0x8F978D36": {
+   "name": "Eat $int Grilled Cheese Sandwiches",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Eat Grilled Cheese",
+   "folder": "EP2Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0x91B02345": {
+   "name": "Have X Simultaneous Pet Best Friends",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Pet Best Friend",
+   "folder": "EP4Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0x924CF12F": {
+   "name": "Become a Rock God",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Music",
+   "folder": "EP5Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xAE955FE7": {
+   "name": "Become Celebrity Party Guest",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Celebrity Party Guest",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xAE956019": {
+   "name": "Become a Ecological Guru",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Ecological Guru",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xAE9562B5": {
+   "name": "Reach Golden Annversary",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Golden Anniversary",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xAF978D5D": {
+   "name": "Have $int of Dream Dates",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Have X Dream Dates",
+   "folder": "EP2Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xB24CEFA4": {
+   "name": "Become a Game Designer",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Gamer",
+   "folder": "EP5Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xCE956161": {
+   "name": "Graduate $int Children from College",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Graduate Children from College",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xCF978CB9": {
+   "name": "Have $int 1st Dates",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Have X First Dates",
+   "folder": "EP2Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xD24CF027": {
+   "name": "Become The Law",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Law",
+   "folder": "EP5Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xD24CF05F": {
+   "name": "Become a Media Magnate",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Journalism",
+   "folder": "EP5Lifetime",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xEE955FCE": {
+   "name": "Become a Celebrity Chef",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Celebrity Chef",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xEE9560BC": {
+   "name": "Become Tycoon",
+   "object_type": "Career",
+   "check_tree": "CT - Test - Lifetime Want - Tycoon",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xEE956264": {
+   "name": "Max $int Skills",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Max X Skills",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xEE956296": {
+   "name": "Marry Off $int Children",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Marry Off Children",
+   "folder": "EP1Lifetime",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029003": {
+   "name": "Lifetime - Vacation Mementos",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Vacation Mementos",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029004": {
+   "name": "Lifetime - X Travels",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - X Travels",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029009": {
+   "name": "Lifetime - Make X Toys",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Toy Maker",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF502900A": {
+   "name": "Lifetime - X Robotic Devices",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Robotics",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF502900B": {
+   "name": "Lifetime - X Flower Arrangements",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Florist",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF502900D": {
+   "name": "Lifetime - Catch $int Fish",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Catch X Fish",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF502900E": {
+   "name": "Lifetime - X Salon Makeovers",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Stylist Makeovers",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF502900F": {
+   "name": "Lifetime - Publish Bestselling Novel",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Write Novels",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029010": {
+   "name": "Lifetime - Paint Masterpieces",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Paint Masterpieces",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029011": {
+   "name": "Lifetime - Gain X Gold Badges",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Gain X Gold Badges",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029012": {
+   "name": "Lifetime - Win Fights With X Sims",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Win Fights With X Sims",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF5029014": {
+   "name": "Lifetime - Perfect Child",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Perfect Child",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029015": {
+   "name": "Lifetime - Self-Employed Talent",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Self-Employed Talent",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF5029016": {
+   "name": "Lifetime - X Successful Parties",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Successful Parties",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029017": {
+   "name": "Lifetime - Teach For X Hours",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Teach For X Hours",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029019": {
+   "name": "Lifetime - Repair X Objects",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Repair X Objects",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF502901A": {
+   "name": "Lifetime - Street Performer",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Street Performer",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF502901B": {
+   "name": "Lifetime - Personal Trainer",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Personal Trainer",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF502901C": {
+   "name": "Lifetime - X Barman/Barista Orders",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Drinks Master",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF502901D": {
+   "name": "Lifetime - Influence X Times",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Powerful Influencer",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF502901E": {
+   "name": "Lifetime - X Enemies Bad Rep",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - X Furious Enemies",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF502901F": {
+   "name": "Lifetime - Poker Player",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Poker Player",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029020": {
+   "name": "Lifetime - Change X Careers",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Job Hopper",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029021": {
+   "name": "Lifetime - Pool Hustler",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Pool Hustler",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029022": {
+   "name": "Lifetime - Freelance DJ",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Freelance DJ",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029023": {
+   "name": "Lifetime - Careerist Clan",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Careerist Clan",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029024": {
+   "name": "Lifetime - Freelance Musician",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Freelance Musician",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029025": {
+   "name": "Lifetime - Harvest X Garden Produce",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Harvest X Produce",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF5029027": {
+   "name": "Lifetime - Black Widow",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Black Widow",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029028": {
+   "name": "Lifetime - Turn X Sims Into Vampires",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Turn X Vampires",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029029": {
+   "name": "Lifetime - X Zombies",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Resurrect X Zombies",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF502902A": {
+   "name": "Lifetime - Supernatural Combo",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Supernatural Combo",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF502902B": {
+   "name": "Surrounded by Robots",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Surrounded by Robots",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 5000
+  },
+  "0xF502902C": {
+   "name": "Lifetime - X Alien Abductions",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - X Alien Abductions",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  },
+  "0xF5029033": {
+   "name": "Lifetime - Mansion and Garden",
+   "object_type": "None",
+   "check_tree": "CT - Test - Lifetime Want - Mansion and Garden",
+   "folder": "Custom",
+   "score": 25000,
+   "influence": 10000
+  }
+ }
+}

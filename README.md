@@ -219,7 +219,9 @@ the app trivially incapable of corrupting a save).
 |------|--------------|
 | `s2parser.py` | DBPF container + QFS/RefPack **compression and decompression** + BHAV (SimAntics) decompiler. Also a CLI: `python3 s2parser.py --bhav file.package` |
 | `s2neighborhood.py` | Turns a neighborhood's packages into JSON: sims, households, lots, family ties, relationships, businesses. `python3 s2neighborhood.py --out sims.json` |
-| `s2ngbh.py` | The neighborhood token store (NGBH): owned businesses with their rank, and every sim's talent badges |
+| `s2ngbh.py` | The neighborhood token store (NGBH): owned businesses with their rank, every sim's talent badges, and sim memories |
+| `s2ltw.py` | Lifetime wants: which one a sim holds and how far along they are. `python3 s2ltw.py --hood N002 --sim "Ripp Grunt"` |
+| `make_wants.py` | Regenerates `wants.json` (want GUID → name/check tree) from the game install plus any custom LTW packs in Downloads |
 | `s2luastate.py` | Per-sim Lua state tables (`0x3053CF74`): Open for Business perks and unspent perk points, and Pets learned behaviors |
 | `s2savediff.py` | Snapshots a save and diffs two snapshots by package, resource, and byte — the "where does the game keep X?" tool. `python3 s2savediff.py snap before` / `diff before after --minus …` |
 | `s2doctor.py` | Freeze/glitch diagnostic — reads the game's own error logs, scans Downloads for damaged packages and overlapping overrides, and cross-references the two. `python3 s2doctor.py` |
@@ -275,6 +277,22 @@ travelers:
   `s2luastate.sim_business_perks()`. It was found by saving either side of
   buying a single perk and diffing (`s2savediff.py`); the perk showed up as a
   24-byte growth in a resource type nothing here parsed yet.
+- **Sim memories are NGBH tokens too**, and a sim's group holds more than their
+  own: the gossip they picked up is filed under them as well, owned by whoever
+  it happened to. Slot 4 is the owner and slot 12 the subject, so anything
+  counting a sim's memories has to filter on slot 4 or it will count the
+  neighbours' business as theirs. Memories about nobody — "Maxed 7 Skills" —
+  stop one slot short and have no subject at all.
+- **Lifetime want progress is not stored anywhere.** The want itself is the
+  first record of the sim's **SWAF** (instance = sim nid) together with its
+  target — the `$int` in "WooHoo with $int Different Sims" — but the number the
+  aspiration panel shows is recomputed on the spot by a per-want
+  `CT - Test - Lifetime Want - …` BHAV. `s2ltw.py` reimplements the readable
+  ones and labels every answer `exact`, `approx`, or `unknown` rather than
+  guessing; disassembling a want's check tree (its `checkTree` key in
+  `Wants.package`) is how you find out what it actually counts. Completion is
+  easier than progress: fulfilling a want leaves a `Memory - Lifetime - …`
+  token, which survives the sim rerolling to a different want afterwards.
 
 And one for macOS developers: on macOS 26, a `ScrollView` in a window's root
 SwiftUI hierarchy can shift sibling views ~16pt off-window (Liquid Glass
