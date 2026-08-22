@@ -130,6 +130,11 @@ class ResourceEntry:
 HEADER_MAGIC = b"DBPF"
 HEADER_SIZE = 96
 
+# Directory of compressed files: the package's own record of which resources
+# are QFS-compressed, and how big each is decompressed. It is the only
+# reliable answer to "is this resource compressed?" — see read_resource.
+TYPE_DIR = 0xE86B1EEF
+
 
 def parse_header(f: BinaryIO) -> Header:
     data = f.read(HEADER_SIZE)
@@ -192,11 +197,58 @@ def open_package(path: Path) -> tuple[Header, list[ResourceEntry]]:
     return header, entries
 
 
-def read_resource(f: BinaryIO, entry: ResourceEntry) -> bytes:
-    """Read raw resource bytes and decompress if QFS-compressed."""
+def parse_dir(data: bytes, index_version: "tuple[int, int]") -> "dict[tuple[int, int, int, int], int]":
+    """Decode a DIR resource into {(type, group, instance, resource): size}.
+
+    Entry width follows the index version — 16 bytes below 7.2, 20 at 7.2,
+    where the extra field is the resource id. Verified against all 25 sample
+    packages carrying a DIR, v7.1 and v7.2 alike: every one divides exactly
+    and names precisely the resources that really are compressed.
+    """
+    width = 20 if index_version >= (7, 2) else 16
+    out = {}
+    for pos in range(0, len(data) - width + 1, width):
+        if width == 20:
+            t, g, i, r, size = struct.unpack_from("<IIIII", data, pos)
+        else:
+            t, g, i, size = struct.unpack_from("<IIII", data, pos)
+            r = 0
+        out[(t, g, i, r)] = size
+    return out
+
+
+def read_dir(f: BinaryIO, entries: "list[ResourceEntry]",
+             index_version: "tuple[int, int]") -> "dict[tuple[int, int, int, int], int] | None":
+    """The package's compression directory, or None if it has no DIR.
+
+    The DIR is never itself compressed — it would have to describe itself —
+    so it is read raw rather than through read_resource.
+    """
+    for e in entries:
+        if e.type_id == TYPE_DIR:
+            f.seek(e.offset)
+            return parse_dir(f.read(e.size), index_version)
+    return None
+
+
+def read_resource(f: BinaryIO, entry: ResourceEntry, *,
+                  compressed: "bool | None" = None) -> bytes:
+    """Read a resource's bytes, decompressing it if it is QFS-compressed.
+
+    `compressed` is the package's own answer, from its DIR — pass
+    `key in read_dir(...)` for it. When it is None the payload is sniffed for
+    the QFS magic instead, which is a guess and not always the right one: a
+    stored resource whose bytes happen to carry 0x10FB at offset 4 is
+    indistinguishable from a compressed one by sniffing alone, and gets
+    decoded into garbage. That is a 1-in-65536 shot per stored resource, so
+    it stays hidden until it doesn't. Prefer the DIR wherever one exists;
+    see s2writer.read_all_resources.
+    """
     f.seek(entry.offset)
     data = f.read(entry.size)
-    return qfs_decompress(data)
+    if compressed is None:
+        compressed = len(data) >= QFS_HEADER_SIZE and data[4:6] == QFS_MAGIC
+    return qfs_decompress(data) if compressed else data
 
 
 # ---------------------------------------------------------------------------
