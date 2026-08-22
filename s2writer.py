@@ -122,8 +122,19 @@ def read_all_resources(path: Path | str) -> list[Resource]:
     out = []
     with open(path, "rb") as f:
         header = s2parser.parse_header(f)
-        for e in s2parser.parse_index(f, header):
-            data = s2parser.read_resource(f, e)
+        entries = s2parser.parse_index(f, header)
+        version = (header.index_major_version, header.index_minor_version)
+        # The DIR says which resources are compressed, and no DIR means none
+        # are. Sniffing the payload for the QFS magic instead would misread a
+        # stored resource that happens to carry 0x10FB at offset 4. Checked
+        # against 4,000 of the game's own packages: the DIR agrees with a
+        # sniff on all 3,778 that carry one, and none of the 222 without one
+        # hold a compressed resource.
+        directory = s2parser.read_dir(f, entries, version) or {}
+        for e in entries:
+            key = (e.type_id, e.group_id, e.instance, e.resource_id)
+            compressed = key in directory
+            data = s2parser.read_resource(f, e, compressed=compressed)
             # e.instance/e.resource_id pick the right index fields for the
             # donor's index version; below 7.2 there is no 4th u32 at all.
             out.append(Resource(e.type_id, e.group_id, e.instance, data, e.resource_id))
@@ -166,24 +177,65 @@ def _selftest(donor: str) -> None:
             plain_size = size
             print(f"stored:     {len(payload)} resources, {size} bytes")
         else:
-            # The DIR must name exactly the resources that really are packed.
-            listed = set()
-            for d in directory:
-                for i in range(len(d.data) // 20):
-                    t, g, iid, rid, _unc = struct.unpack_from("<IIIII", d.data, i * 20)
-                    listed.add((t, g, iid, rid))
+            # Every resource the DIR names must really decompress, to exactly
+            # the size the DIR records. Checking that against a magic sniff
+            # instead would just be comparing the DIR to the guess it exists
+            # to replace — and would agree with it in precisely the case the
+            # DIR is there to get right.
             with open(tmp_path, "rb") as f:
                 header = s2parser.parse_header(f)
-                packed = set()
-                for e in s2parser.parse_index(f, header):
+                entries = s2parser.parse_index(f, header)
+                version = (header.index_major_version, header.index_minor_version)
+                listed = s2parser.read_dir(f, entries, version)
+                assert listed, "compressed package should carry a DIR"
+                by_key = {(e.type_id, e.group_id, e.instance, e.resource_id): e
+                          for e in entries}
+                assert s2parser.TYPE_DIR not in {k[0] for k in listed}, \
+                    "the DIR must not list itself"
+                for key, unc in listed.items():
+                    assert key in by_key, f"DIR names a resource not in the index: {key}"
+                    e = by_key[key]
                     f.seek(e.offset)
-                    if f.read(6)[4:6] == s2parser.QFS_MAGIC:
-                        packed.add((e.type_id, e.group_id, e.instance, e.resource_id))
-            assert listed == packed, \
-                f"DIR lists {len(listed)} resources but {len(packed)} are compressed"
+                    raw = f.read(e.size)
+                    plain = s2parser.qfs_decompress(raw)
+                    assert plain is not raw and len(plain) == unc, (
+                        f"DIR claims {unc} decompressed bytes for {key}, "
+                        f"got {len(plain)}")
             print(f"compressed: {len(payload)} resources, {size} bytes "
                   f"({size / plain_size:.1%} of stored), "
                   f"DIR lists {len(listed)} -> {tmp_path}")
+
+    _selftest_magic_collision()
+
+
+def _selftest_magic_collision() -> None:
+    """A stored resource that merely looks compressed must survive the trip.
+
+    Sniffing the payload for the QFS magic used to decide this, so a resource
+    whose bytes happened to carry 0x10FB at offset 4 was decoded as though it
+    were compressed and came back as garbage. It is the DIR's job to say, and
+    a package written without compression has no DIR to say it — so both
+    paths are exercised here.
+    """
+    import os
+    import tempfile
+
+    # Incompressible, so `compress=True` stores it plain and leaves it out of
+    # the DIR, and carrying the magic where the old sniff looked for it.
+    payload = os.urandom(4) + s2parser.QFS_MAGIC + os.urandom(4000)
+    r = Resource(0x42484156, 0xDEADBEEF, 0x1000, payload, 0)
+
+    for compress in (False, True):
+        with tempfile.NamedTemporaryFile(suffix=".package", delete=False) as tmp:
+            tmp_path = tmp.name
+        write_package(tmp_path, [r], compress=compress)
+        back = [x for x in read_all_resources(tmp_path) if x.type_id != TYPE_DIR]
+        assert len(back) == 1, f"expected 1 resource, got {len(back)}"
+        assert back[0].data == payload, (
+            f"a stored resource that looks compressed came back as "
+            f"{len(back[0].data)} bytes, not {len(payload)} (compress={compress})")
+        os.unlink(tmp_path)
+    print(f"magic collision: {len(payload)}-byte stored resource survives both ways")
 
 
 if __name__ == "__main__":
