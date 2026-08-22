@@ -19,10 +19,15 @@ import s2parser
 HEADER_SIZE = 96
 INDEX_ENTRY_SIZE = 24  # index v7.2: type, group, instance, instance_hi, offset, size
 
-# Directory of compressed files. Since write_package() emits everything
-# uncompressed, this must be dropped: a stale DIR tells the game to
-# decompress resources that are no longer compressed.
+# Directory of compressed files: it lists which resources are QFS-compressed
+# and how big each one is decompressed. A DIR carried over from a donor is
+# always dropped, since write_package decides compression for itself.
 TYPE_DIR = 0xE86B1EEF
+
+# The DIR's own identity, constant across all 25 sample packages that have
+# one. Entry width follows the index version — 16 bytes at v7.1, 20 at v7.2
+# (the extra field is the resource id) — and this writer emits v7.2.
+DIR_TGI = (TYPE_DIR, 0xE86B1EEF, 0x286B1F03, 0)
 
 
 @dataclass
@@ -41,12 +46,17 @@ class Resource:
         return (self.type_id, self.group_id, self.instance_id, self.instance_hi)
 
 
-def write_package(path: Path | str, resources: list[Resource]) -> None:
+def write_package(path: Path | str, resources: list[Resource], *,
+                  compress: bool = False) -> None:
     """Serialize resources into a DBPF v1.1 / index 7.2 package file.
 
-    Any DIR resource is dropped: everything here is written uncompressed, so
-    a carried-over directory would point the game at compression that is no
-    longer there.
+    With `compress`, each resource is QFS-compressed and kept only if that
+    actually made it smaller, and a DIR is emitted listing exactly what ended
+    up compressed. Without it everything is stored plain.
+
+    Either way an incoming DIR is dropped and rebuilt rather than carried
+    over: it describes compression this call decides afresh, so a donor's
+    directory would be describing a file that no longer exists.
     """
     resources = [r for r in resources if r.type_id != TYPE_DIR]
 
@@ -56,17 +66,40 @@ def write_package(path: Path | str, resources: list[Resource]) -> None:
             raise ValueError(f"Duplicate TGI: {r.type_name} g={r.group_id:08x} i={r.instance_id:08x}")
         seen.add(r.tgi())
 
+    # (on-disk bytes, uncompressed length) per resource, in package order.
+    payloads: list[bytes] = []
+    directory: list[Resource] = []
+    for r in resources:
+        blob = r.data
+        if compress and len(r.data) <= s2parser.QFS_MAX_UNCOMPRESSED:
+            packed = s2parser.qfs_compress(r.data)
+            # Compression that grew the resource is worse than none: the game
+            # reads either, and the DIR is what says which this is.
+            if len(packed) < len(blob):
+                blob = packed
+                directory.append(r)
+        payloads.append(blob)
+
+    if directory:
+        entries = b''.join(
+            struct.pack("<IIIII", r.type_id, r.group_id, r.instance_id,
+                        r.instance_hi, len(r.data))
+            for r in directory)
+        resources = resources + [Resource(*DIR_TGI[:3], entries, DIR_TGI[3])]
+        payloads.append(entries)
+
     body = bytearray()
     offsets = []
-    for r in resources:
+    for blob in payloads:
         offsets.append(HEADER_SIZE + len(body))
-        body += r.data
+        body += blob
 
     index_offset = HEADER_SIZE + len(body)
     index = bytearray()
-    for r, off in zip(resources, offsets):
+    for r, blob, off in zip(resources, payloads, offsets):
         index += struct.pack(
-            "<IIIIII", r.type_id, r.group_id, r.instance_id, r.instance_hi, off, len(r.data)
+            "<IIIIII", r.type_id, r.group_id, r.instance_id, r.instance_hi,
+            off, len(blob)
         )
 
     header = bytearray(HEADER_SIZE)
@@ -98,22 +131,59 @@ def read_all_resources(path: Path | str) -> list[Resource]:
 
 
 def _selftest(donor: str) -> None:
-    """Round-trip: read donor decompressed, rewrite, re-read, compare."""
+    """Round-trip the donor both ways: stored, and QFS-compressed.
+
+    Compression must be invisible through read_all_resources — same TGIs,
+    same bytes — so the two passes assert against the same expectation and
+    only the file size differs.
+    """
     import tempfile
 
     original = read_all_resources(donor)
     original = [r for r in original if r.type_id != TYPE_DIR]
 
-    with tempfile.NamedTemporaryFile(suffix=".package", delete=False) as tmp:
-        tmp_path = tmp.name
-    write_package(tmp_path, original)
-    reread = read_all_resources(tmp_path)
+    for compress in (False, True):
+        with tempfile.NamedTemporaryFile(suffix=".package", delete=False) as tmp:
+            tmp_path = tmp.name
+        write_package(tmp_path, original, compress=compress)
+        reread = read_all_resources(tmp_path)
 
-    assert len(original) == len(reread), f"count {len(original)} != {len(reread)}"
-    for a, b in zip(original, reread):
-        assert a.tgi() == b.tgi(), f"TGI mismatch: {a.tgi()} != {b.tgi()}"
-        assert a.data == b.data, f"data mismatch on {a.type_name} g={a.group_id:08x} i={a.instance_id:08x}"
-    print(f"round-trip OK: {len(original)} resources, {Path(tmp_path).stat().st_size} bytes -> {tmp_path}")
+        # A compressed package carries a DIR the plain one has no need for.
+        directory = [r for r in reread if r.type_id == TYPE_DIR]
+        payload = [r for r in reread if r.type_id != TYPE_DIR]
+
+        assert len(original) == len(payload), \
+            f"count {len(original)} != {len(payload)} (compress={compress})"
+        for a, b in zip(original, payload):
+            assert a.tgi() == b.tgi(), f"TGI mismatch: {a.tgi()} != {b.tgi()}"
+            assert a.data == b.data, \
+                (f"data mismatch on {a.type_name} g={a.group_id:08x} "
+                 f"i={a.instance_id:08x} (compress={compress})")
+
+        size = Path(tmp_path).stat().st_size
+        if not compress:
+            assert not directory, "stored package should carry no DIR"
+            plain_size = size
+            print(f"stored:     {len(payload)} resources, {size} bytes")
+        else:
+            # The DIR must name exactly the resources that really are packed.
+            listed = set()
+            for d in directory:
+                for i in range(len(d.data) // 20):
+                    t, g, iid, rid, _unc = struct.unpack_from("<IIIII", d.data, i * 20)
+                    listed.add((t, g, iid, rid))
+            with open(tmp_path, "rb") as f:
+                header = s2parser.parse_header(f)
+                packed = set()
+                for e in s2parser.parse_index(f, header):
+                    f.seek(e.offset)
+                    if f.read(6)[4:6] == s2parser.QFS_MAGIC:
+                        packed.add((e.type_id, e.group_id, e.instance, e.resource_id))
+            assert listed == packed, \
+                f"DIR lists {len(listed)} resources but {len(packed)} are compressed"
+            print(f"compressed: {len(payload)} resources, {size} bytes "
+                  f"({size / plain_size:.1%} of stored), "
+                  f"DIR lists {len(listed)} -> {tmp_path}")
 
 
 if __name__ == "__main__":
