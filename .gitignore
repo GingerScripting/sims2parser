@@ -11,3 +11,7 @@ quarantine/
 game-guides/
 icons/
 teen_randomizer.sh
+
+# Local Claude Code state — machine-specific, not shared
+.claude/settings.local.json
+.claude/worktrees/
