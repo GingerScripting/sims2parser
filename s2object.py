@@ -66,6 +66,7 @@ OBJD: 64B filename + 108 u16 fields + u32 name-len + name.
 # python3 (3.9), which the app gets when launched from Finder.
 from __future__ import annotations
 
+import re
 import struct
 from dataclasses import dataclass, field
 
@@ -96,6 +97,7 @@ OWNER_LOCAL = 0x19
 
 TREE_VERSION = 0xFFFF800A  # matches donor trees; loads on all EP-era games
 
+TYPE_BCON = 0x42434F4E
 TYPE_BHAV = 0x42484156
 TYPE_CTSS = 0x43545353
 TYPE_GLOB = 0x474C4F42
@@ -607,10 +609,94 @@ def build_objd(o: Objd) -> bytes:
             + struct.pack('<I', len(raw)) + raw)
 
 
+# ---- BCON --------------------------------------------------------------------
+
+# Layout confirmed against all 462 BCONs in the game's own packages plus the
+# local Downloads folder: a 64-byte name, a one-byte count, a one-byte flag,
+# then that many u16 constants. The count is a *byte* — reading it as a u16
+# works for half the corpus and then fails on every resource with the flag
+# set, because the flag lands in the high byte (0x8008 reads as 32776).
+
+@dataclass
+class Bcon:
+    """Behaviour constants — the numeric tuning table a BHAV reads from.
+
+    This is what "tuning a mod" usually means: the values live here, and the
+    BHAV indexes into them. TRCN names these entries, but that resource is a
+    separate format and is not parsed yet.
+    """
+    filename: str
+    values: list[int]
+    flag: int = 0                    # 0 or 0x80 across the corpus; preserved
+    _name_raw: bytes | None = field(default=None, repr=False)
+
+
+def parse_bcon(data: bytes) -> Bcon:
+    """Parse a BCON (behaviour constants table)."""
+    if len(data) < 66:
+        raise ValueError(f"BCON data too short ({len(data)} bytes)")
+    count, flag = data[64], data[65]
+    expected = 66 + count * 2
+    if expected != len(data):
+        raise ValueError(
+            f"BCON count {count} implies {expected} bytes, resource is {len(data)}")
+    values = list(struct.unpack_from(f'<{count}H', data, 66))
+    return Bcon(_read_name64(data), values, flag, data[:64])
+
+
+def build_bcon(b: Bcon) -> bytes:
+    """Serialize a Bcon. Inverse of parse_bcon."""
+    if len(b.values) > 0xFF:
+        raise ValueError(f"BCON holds at most 255 constants, got {len(b.values)}")
+    return (_emit_name64(b.filename, b._name_raw)
+            + bytes((len(b.values), b.flag))
+            + struct.pack(f'<{len(b.values)}H', *b.values))
+
+
+# ---- GLOB --------------------------------------------------------------------
+
+@dataclass
+class Glob:
+    """Semi-global reference — which shared tree set the object inherits.
+
+    One length-prefixed name after the 64-byte header, and that is the whole
+    resource for 166 of the 170 in the corpus. The other four carry trailing
+    filler (0xA3 bytes) after the string, which `_tail` preserves so a
+    round-trip stays byte-identical.
+    """
+    filename: str
+    semi_global: str
+    _name_raw: bytes | None = field(default=None, repr=False)
+    _tail: bytes = b''
+
+
+def parse_glob(data: bytes) -> Glob:
+    """Parse a GLOB (semi-global reference)."""
+    if len(data) < 65:
+        raise ValueError(f"GLOB data too short ({len(data)} bytes)")
+    length = data[64]
+    end = 65 + length
+    if end > len(data):
+        raise ValueError(
+            f"GLOB names {length} bytes but only {len(data) - 65} follow")
+    return Glob(_read_name64(data), data[65:end].decode('latin-1'),
+                data[:64], data[end:])
+
+
+def build_glob(g: Glob) -> bytes:
+    """Serialize a Glob. Inverse of parse_glob."""
+    raw = g.semi_global.encode('latin-1', 'replace')
+    if len(raw) > 0xFF:
+        raise ValueError(f"GLOB name is at most 255 bytes, got {len(raw)}")
+    return _emit_name64(g.filename, g._name_raw) + bytes((len(raw),)) + raw + g._tail
+
+
 # ---- dispatch ----------------------------------------------------------------
 
 # type id -> (parser, builder). STR#/TTAs/CTSS share one string-table format.
 PARSERS = {
+    TYPE_BCON: (parse_bcon, build_bcon),
+    TYPE_GLOB: (parse_glob, build_glob),
     TYPE_STR: (parse_str, build_str),
     TYPE_TTAS: (parse_str, build_str),
     TYPE_CTSS: (parse_str, build_str),
@@ -637,12 +723,22 @@ def _selftest(sample_dir: str = 'sample-packages') -> int:
     A parser that silently drops bytes is worse than no parser, so the bar
     here is byte-identical output, not "it parsed without raising".
     """
+    from collections import Counter, defaultdict
     from pathlib import Path
     import s2parser
 
     ok = skipped = 0
     failures: list[str] = []
-    packages = sorted(Path(sample_dir).glob('*.package'))
+    # masked message -> {concrete message: count}. Grouping on the raw text
+    # does not work: only some of this module's messages put their numbers in
+    # a trailing parenthetical, so the rest would give one summary line per
+    # resource and the summary would stop summarising.
+    gaps: "dict[str, Counter[str]]" = defaultdict(Counter)
+    # Recurse, so the game's own install and a Downloads folder can be used as
+    # a wide corpus. sample-packages/ holds only a handful of some types —
+    # BCON 6, GLOB 1, TPRP 1, SLOT 1 and no TRCN at all — which is too thin to
+    # prove a parser on its own.
+    packages = sorted(Path(sample_dir).rglob('*.package'))
     if not packages:
         print(f"no packages found in {sample_dir}/")
         return 1
@@ -662,8 +758,16 @@ def _selftest(sample_dir: str = 'sample-packages') -> int:
                 try:
                     obj = parse_resource(e.type_id, data)
                 except ValueError as exc:
+                    # A parser that *declines* a resource — an unsupported
+                    # version, a length it can't square — is a coverage gap,
+                    # not a round-trip failure. Only a parser that accepts a
+                    # resource and then can't reproduce it is a bug. Keeping
+                    # the two apart is what makes a wide corpus usable: over
+                    # the game's Downloads folder the known TTAB version gap
+                    # alone raises 165 of these, and a real regression would
+                    # be invisible among them.
                     skipped += 1
-                    failures.append(f"{label}: {exc}")
+                    gaps[_gap_template(str(exc))][str(exc)] += 1
                     continue
                 rebuilt = build_resource(e.type_id, obj)
                 if rebuilt == data:
@@ -676,9 +780,45 @@ def _selftest(sample_dir: str = 'sample-packages') -> int:
 
     print(f"round-trip: {ok} resource(s) byte-identical across "
           f"{len(packages)} package(s)")
+    if skipped:
+        print(f"declined by a parser: {skipped} resource(s)")
+        for template, variants in sorted(gaps.items(),
+                                         key=lambda kv: -sum(kv[1].values())):
+            print(f"  {sum(variants.values()):5} x {template}")
+            # The template masks the numbers, so show a few concrete messages
+            # to keep the detail that actually identifies a gap — which TTAB
+            # versions are missing, say, rather than just "some version".
+            for msg, n in variants.most_common(_GAP_VARIANTS):
+                print(f"          {n:5} {msg}")
+            if len(variants) > _GAP_VARIANTS:
+                print(f"          ... and {len(variants) - _GAP_VARIANTS} more")
     for msg in failures:
         print(f"  FAIL {msg}")
-    return 1 if failures else 0
+    if failures:
+        return 1
+    if ok == 0:
+        # Every parseable resource was declined. Nothing was verified, so
+        # this is not a pass — a harness that reports success having checked
+        # nothing is worse than one that fails.
+        print("nothing verified: every parseable resource was declined")
+        return 1
+    return 0
+
+
+# How many concrete messages to show under each masked template.
+_GAP_VARIANTS = 4
+
+_GAP_NUMBER = re.compile(r'0x[0-9A-Fa-f]+|\d+')
+
+
+def _gap_template(message: str) -> str:
+    """Mask the numbers out of a parser's message, for grouping declines.
+
+    'BCON count 12 implies 90 bytes, resource is 88' and the same message
+    with different sizes are one gap, not two. The concrete messages are
+    still shown underneath, so nothing is lost.
+    """
+    return _GAP_NUMBER.sub('#', message)
 
 
 def _first_diff(a: bytes, b: bytes) -> int | str:
