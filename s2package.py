@@ -17,11 +17,68 @@ notice when an index shuffles.
 # python3 (3.9), which the app gets when launched from Finder.
 from __future__ import annotations
 
-from dataclasses import replace
-
+import s2parser
 from s2writer import Resource
 
 TGI = "tuple[int, int, int, int]"
+
+
+class LazyResource(Resource):
+    """A Resource that stays QFS-packed until its bytes are first needed.
+
+    The game's objects.package holds 48,000 compressed resources — 128 MB
+    once inflated — and decompressing all of it in pure Python takes minutes.
+    A user opening it to edit one string should not wait for that, and a
+    Save As should not spend minutes recompressing 48,000 resources nobody
+    touched. So a compressed resource keeps its on-disk form here, inflates
+    on first access to `data`, and forgets the packed form the moment
+    `data` is assigned, since it no longer describes those bytes.
+    `s2writer.write_package` writes a still-packed resource as-is.
+    """
+
+    def __init__(self, type_id: int, group_id: int, instance_id: int,
+                 packed: bytes, instance_hi: int = 0):
+        # Deliberately not Resource.__init__: that assigns `data`, which is a
+        # property here, and the assignment would count as an edit.
+        self.type_id = type_id
+        self.group_id = group_id
+        self.instance_id = instance_id
+        self.instance_hi = instance_hi
+        self._packed: "bytes | None" = packed
+        self._plain: "bytes | None" = None
+
+    @property
+    def data(self) -> bytes:
+        if self._plain is None:
+            self._plain = s2parser.qfs_decompress(self._packed)
+        return self._plain
+
+    @data.setter
+    def data(self, value: bytes) -> None:
+        self._plain = bytes(value)
+        self._packed = None
+
+    @property
+    def packed(self) -> "bytes | None":
+        """The original QFS stream, or None once the bytes have been edited."""
+        return self._packed
+
+    @property
+    def size(self) -> int:
+        """Uncompressed length, without inflating — the QFS header carries it."""
+        if self._plain is not None:
+            return len(self._plain)
+        return int.from_bytes(self._packed[6:9], "big")
+
+    def __repr__(self) -> str:
+        state = "packed" if self._packed is not None else "plain"
+        return (f"LazyResource({self.type_name}, g={self.group_id:08x}, "
+                f"i={self.instance_id:08x}, {state}, {self.size} bytes)")
+
+
+def size(res: Resource) -> int:
+    """Uncompressed length of a resource, inflating nothing."""
+    return res.size if isinstance(res, LazyResource) else len(res.data)
 
 
 def parse_tgi(value) -> "tuple[int, int, int, int]":
@@ -98,12 +155,21 @@ def rename(resources: "list[Resource]", tgi: "tuple[int, int, int, int]",
     if new_tgi != tgi and find(resources, new_tgi) >= 0:
         raise ValueError(f"duplicate TGI: {new_tgi}")
     r = resources[n]
-    t, g, i, hi = new_tgi
-    resources[n] = replace(r, type_id=t, group_id=g, instance_id=i, instance_hi=hi)
-    return resources[n]
+    # Re-keyed in place rather than rebuilt: the caller has already
+    # snapshotted it for undo, and a LazyResource has no field constructor.
+    r.type_id, r.group_id, r.instance_id, r.instance_hi = new_tgi
+    return r
 
 
 def copy(res: Resource) -> Resource:
-    """A snapshot of a resource, for the undo stack. `bytes` is immutable so
-    only the record itself needs copying."""
-    return replace(res, data=bytes(res.data))
+    """A snapshot of a resource, for the undo stack.
+
+    `bytes` is immutable, so the snapshot shares payloads with the original
+    and only the record is new. A still-packed LazyResource stays packed —
+    snapshotting a 3 MB texture must not inflate it.
+    """
+    if isinstance(res, LazyResource) and res.packed is not None:
+        c = LazyResource(res.type_id, res.group_id, res.instance_id, res.packed, res.instance_hi)
+        c._plain = res._plain
+        return c
+    return Resource(res.type_id, res.group_id, res.instance_id, bytes(res.data), res.instance_hi)

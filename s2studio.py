@@ -134,12 +134,26 @@ _CLASSES = {
 }
 
 
+def _settable_properties(cls) -> "list[str]":
+    """Names of the dataclass's read/write properties — the typed views a
+    parser layers over its raw fields (TtabEntry.action over `raw`,
+    Objd.guid over `words`). They travel alongside the fields so the editor
+    can show and edit them by name without knowing the byte layout."""
+    return [name for name in dir(cls)
+            if not name.startswith("_")
+            and isinstance(getattr(cls, name, None), property)
+            and getattr(cls, name).fset is not None]
+
+
 def to_json(obj):
-    """Dataclass -> {"$type": name, fields...}; bytes -> {"$hex": ...}."""
+    """Dataclass -> {"$type": name, fields..., "$props": {...}}; bytes -> {"$hex": ...}."""
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         out = {"$type": type(obj).__name__}
         for f in dataclasses.fields(obj):
             out[f.name] = to_json(getattr(obj, f.name))
+        props = {name: to_json(getattr(obj, name)) for name in _settable_properties(type(obj))}
+        if props:
+            out["$props"] = props
         return out
     if isinstance(obj, (bytes, bytearray, memoryview)):
         return {"$hex": bytes(obj).hex()}
@@ -174,9 +188,19 @@ def from_json(value):
                     v = bytearray(v)
                 kwargs[f.name] = v
             try:
-                return cls(**kwargs)
+                obj = cls(**kwargs)
             except TypeError as exc:
                 raise RpcError("bad_params", f"{cls.__name__}: {exc}") from None
+            # Properties are applied after the fields, so an edit made by
+            # name (action=…) wins over the raw bytes it is a view onto.
+            for name, v in (value.get("$props") or {}).items():
+                if name not in _settable_properties(cls):
+                    raise RpcError("bad_params", f"{cls.__name__} has no property {name!r}")
+                try:
+                    setattr(obj, name, from_json(v))
+                except (TypeError, ValueError, struct.error) as exc:
+                    raise RpcError("bad_params", f"{cls.__name__}.{name}: {exc}") from None
+            return obj
         return {k: from_json(v) for k, v in value.items()}
     if isinstance(value, list):
         return [from_json(x) for x in value]
@@ -233,6 +257,10 @@ class Session:
     dirty: bool = False
     undo: "list[Step]" = field(default_factory=list)
     redo: "list[Step]" = field(default_factory=list)
+    # instance -> name for every BHAV, built on first use. Reading a name
+    # means inflating the resource, and objects.package has thousands, so
+    # the answer is kept until an edit could have changed it.
+    bhav_names: "dict[int, str] | None" = None
 
     # -- history ----------------------------------------------------------
 
@@ -240,6 +268,7 @@ class Session:
         self.undo.append(step)
         self.redo.clear()
         self.dirty = True
+        self.bhav_names = None
         while len(self.undo) > UNDO_MAX_STEPS or (
                 len(self.undo) > 1 and sum(s.size() for s in self.undo) > UNDO_MAX_BYTES):
             self.undo.pop(0)
@@ -267,6 +296,7 @@ class Session:
             self._apply(c, forward=False)
         self.redo.append(step)
         self.dirty = True
+        self.bhav_names = None
         return step
 
     def do_redo(self) -> Step:
@@ -277,6 +307,7 @@ class Session:
             self._apply(c, forward=True)
         self.undo.append(step)
         self.dirty = True
+        self.bhav_names = None
         return step
 
     # -- lookups ----------------------------------------------------------
@@ -296,12 +327,30 @@ def load(path: Path) -> Session:
     """Read a package into a fresh session."""
     if not path.is_file():
         raise RpcError("not_found", f"no such file: {path}")
+    # Read every payload but inflate none: a compressed resource becomes a
+    # LazyResource that decompresses when first looked at. The DIR itself is
+    # not kept as a resource — the session tracks compression in
+    # `compressed`, and write_package rebuilds the DIR from that.
+    resources: "list[Resource]" = []
+    compressed: "set[tuple[int, int, int, int]]" = set()
     try:
-        header, entries = s2parser.open_package(path)
-        version = (header.index_major_version, header.index_minor_version)
         with open(path, "rb") as f:
+            header = s2parser.parse_header(f)
+            entries = s2parser.parse_index(f, header)
+            version = (header.index_major_version, header.index_minor_version)
             directory = s2parser.read_dir(f, entries, version) or {}
-        resources = s2writer.read_all_resources(path)
+            for e in entries:
+                if e.type_id == s2parser.TYPE_DIR:
+                    continue
+                key = (e.type_id, e.group_id, e.instance, e.resource_id)
+                f.seek(e.offset)
+                raw = f.read(e.size)
+                if key in directory:
+                    resources.append(s2package.LazyResource(
+                        e.type_id, e.group_id, e.instance, raw, e.resource_id))
+                    compressed.add(key)
+                else:
+                    resources.append(Resource(e.type_id, e.group_id, e.instance, raw, e.resource_id))
     except (OSError, ValueError, struct.error) as exc:
         raise RpcError("bad_package", f"cannot read {path.name}: {exc}") from None
 
@@ -310,8 +359,7 @@ def load(path: Path) -> Session:
         reason = "file is not writable"
     return Session(
         path=path, readonly=reason is not None, readonly_reason=reason or "",
-        header=header, resources=resources,
-        compressed={k for k in directory if s2package.find(resources, k) >= 0},
+        header=header, resources=resources, compressed=compressed,
     )
 
 
@@ -336,7 +384,7 @@ def _index_row(session: Session, r: Resource) -> dict:
     return {
         "type": r.type_id, "type_name": r.type_name,
         "group": r.group_id, "instance": r.instance_id, "instance_hi": r.instance_hi,
-        "size": len(r.data),
+        "size": s2package.size(r),
         "compressed": r.tgi() in session.compressed,
         "decodable": r.type_id in s2object.PARSERS,
         "bhav": r.type_id == s2object.TYPE_BHAV,
@@ -362,11 +410,13 @@ def _summary(session: Session) -> dict:
 
 def _bhav_names(session: Session) -> dict:
     """instance -> name for every BHAV in the package, for CallBHAV labels."""
-    names = {}
-    for r in session.resources:
-        if r.type_id == s2object.TYPE_BHAV and len(r.data) >= 64:
-            names[r.instance_id] = r.data[:64].split(b"\x00", 1)[0].decode("latin-1")
-    return names
+    if session.bhav_names is None:
+        names = {}
+        for r in session.resources:
+            if r.type_id == s2object.TYPE_BHAV and s2package.size(r) >= 64:
+                names[r.instance_id] = r.data[:64].split(b"\x00", 1)[0].decode("latin-1")
+        session.bhav_names = names
+    return session.bhav_names
 
 
 def _render_bhav(session: Session, r: Resource) -> dict:
@@ -419,6 +469,8 @@ def m_meta(session: Session, params: dict) -> dict:
         "decodable_types": sorted(s2object.PARSERS),
         "bhav_type": s2object.TYPE_BHAV,
         "objd_fields": s2object.OBJD_FIELDS,
+        # u32 properties and the low word each spans (guid = words 14,15).
+        "objd_u32_fields": {"guid": 14, "job_guid": 52, "original_guid": 70},
         "objd_word_count": s2object.OBJD_WORD_COUNT,
         "objf_slots": {str(k): v for k, v in s2object.OBJF_SLOTS.items()},
         "str_formats": {"with_desc": s2object.STR_FMT_WITH_DESC,
