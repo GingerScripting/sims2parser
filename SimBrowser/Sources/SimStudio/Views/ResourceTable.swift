@@ -7,6 +7,7 @@ struct ResourceTable: View {
     @ObservedObject var session: PackageSession
     let rows: [ResourceRow]
     var onNewResource: () -> Void
+    var onSplit: ([TGI]) -> Void = { _ in }
 
     @State private var sortOrder = [KeyPathComparator(\ResourceRow.typeName), KeyPathComparator(\ResourceRow.instance)]
     @State private var renameTarget: TGI?
@@ -15,7 +16,7 @@ struct ResourceTable: View {
     private var sorted: [ResourceRow] { rows.sorted(using: sortOrder) }
 
     var body: some View {
-        Table(sorted, selection: $session.selection, sortOrder: $sortOrder) {
+        Table(sorted, selection: $session.selectedTGIs, sortOrder: $sortOrder) {
             TableColumn("Type", value: \.typeName) { r in
                 Text(r.typeName)
             }
@@ -95,6 +96,7 @@ struct ResourceTable: View {
             Button(anyStored ? "Compress on Save" : "Store Uncompressed") {
                 Task { await session.setCompressed(list, anyStored) }
             }
+            Button("Split to New Package…") { onSplit(list) }
             Divider()
             Button("Delete", role: .destructive) { deleteTargets = list }
         }

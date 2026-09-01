@@ -50,10 +50,16 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import base64
+
+import s2clone
 import s2doctor
+import s2mesh
 import s2object
 import s2package
 import s2parser
+import s2texture
+import s2tools
 import s2writer
 from s2writer import Resource
 
@@ -388,6 +394,7 @@ def _index_row(session: Session, r: Resource) -> dict:
         "compressed": r.tgi() in session.compressed,
         "decodable": r.type_id in s2object.PARSERS,
         "bhav": r.type_id == s2object.TYPE_BHAV,
+        "flags": _row_flags(session, r),
     }
 
 
@@ -457,7 +464,16 @@ def m_status(session: Session, params: dict) -> dict:
 
 
 INDEX_COLUMNS = ["type", "group", "instance", "instance_hi", "size", "flags"]
-FLAG_COMPRESSED, FLAG_DECODABLE, FLAG_BHAV = 1, 2, 4
+FLAG_COMPRESSED, FLAG_DECODABLE, FLAG_BHAV, FLAG_TEXTURE, FLAG_MESH = 1, 2, 4, 8, 16
+TEXTURE_TYPES = {s2texture.TYPE_TXTR, 0xFC4B284B}    # both ids s2parser names TXTR
+
+
+def _row_flags(session: Session, r: Resource) -> int:
+    return ((FLAG_COMPRESSED if r.tgi() in session.compressed else 0)
+            | (FLAG_DECODABLE if r.type_id in s2object.PARSERS else 0)
+            | (FLAG_BHAV if r.type_id == s2object.TYPE_BHAV else 0)
+            | (FLAG_TEXTURE if r.type_id in TEXTURE_TYPES else 0)
+            | (FLAG_MESH if r.type_id == s2mesh.TYPE_GMDC else 0))
 
 
 def m_index(session: Session, params: dict) -> dict:
@@ -472,10 +488,8 @@ def m_index(session: Session, params: dict) -> dict:
     rows = []
     names = {}
     for r in session.resources:
-        flags = ((FLAG_COMPRESSED if r.tgi() in session.compressed else 0)
-                 | (FLAG_DECODABLE if r.type_id in s2object.PARSERS else 0)
-                 | (FLAG_BHAV if r.type_id == s2object.TYPE_BHAV else 0))
-        rows.append([r.type_id, r.group_id, r.instance_id, r.instance_hi, s2package.size(r), flags])
+        rows.append([r.type_id, r.group_id, r.instance_id, r.instance_hi,
+                     s2package.size(r), _row_flags(session, r)])
         if r.type_id not in names:
             names[r.type_id] = r.type_name
     return {"columns": INDEX_COLUMNS, "rows": rows,
@@ -709,6 +723,296 @@ def m_import_resource(session: Session, params: dict) -> dict:
                                     "label": f"Import {src.name}"})
 
 
+# ---------------------------------------------------------------------------
+# Object Workshop and package tools
+# ---------------------------------------------------------------------------
+
+# Set by serve(); methods call it to stream progress to the client. A no-op
+# when the methods are driven directly, as the tests do.
+EMIT = lambda obj: None   # noqa: E731
+
+
+def _progress(op: str, done: int, total: int, note: str = "") -> None:
+    EMIT({"event": "progress", "op": op, "done": done, "total": total, "note": note})
+
+
+def _game_root(params: dict) -> Path:
+    if params.get("root"):
+        root = Path(params["root"]).expanduser()
+    else:
+        root = next((c for c in s2doctor.ROOT_CANDIDATES if (c / "Neighborhoods").is_dir()), None)
+    if root is None or not root.is_dir():
+        raise RpcError("not_found", "could not find a Sims 2 user folder; pass root")
+    return root
+
+
+def _object_rows(session: Session) -> list:
+    out = []
+    for n, r in enumerate(session.resources):
+        if r.type_id != s2object.TYPE_OBJD:
+            continue
+        try:
+            o = s2object.parse_objd(r.data)
+        except (ValueError, struct.error):
+            continue
+        out.append({"index": n, "instance": r.instance_id, "group": r.group_id,
+                    "guid": o.guid, "original_guid": o.original_guid,
+                    "filename": o.filename, "name": o.name, "price": o.price,
+                    "ttab_id": o.ttab_id, "ctss_id": o.ctss_id})
+    return out
+
+
+def m_objects(session: Session, params: dict) -> dict:
+    """Every object definition in the package — what the clone sheet picks from."""
+    session.require_open()
+    return {"objects": _object_rows(session)}
+
+
+def m_derive_guid(session: Session, params: dict) -> dict:
+    return {"guid": s2clone.derive_guid(_need(params, "seed"))}
+
+
+def m_clone(session: Session, params: dict) -> dict:
+    """Object Workshop: re-identify an object in place, as one undo step.
+
+    Wraps s2clone.clone, which rewrites the OBJD, catalog text, NREF, the
+    GUID literals in behaviour trees at confirmed operand slots, and MMAT
+    references. What it patched and what it deliberately left alone come
+    back in the report. Typical use: open objects.package (read-only),
+    clone, Save As into Downloads.
+    """
+    session.require_open()
+    name = params.get("name") or None
+    guid = params.get("guid")
+    if guid is None:
+        guid = s2clone.derive_guid(name or f"{session.path.name}:{len(session.undo)}")
+    before = [(r.tgi(), s2package.copy(r)) for r in session.resources]
+    try:
+        report = s2clone.clone(
+            session.resources, guid=int(guid), name=name,
+            description=params.get("description") or None,
+            price=int(params["price"]) if params.get("price") is not None else None,
+            instance=int(params["instance"]) if params.get("instance") is not None else None,
+            select_guid=int(params["select_guid"]) if params.get("select_guid") is not None else None,
+            aggressive=bool(params.get("aggressive", False)))
+    except (ValueError, struct.error) as exc:
+        # The list may be half-rewritten; put every record back.
+        session.resources[:] = [old for _, old in before]
+        raise RpcError("clone_failed", str(exc)) from None
+
+    changes = []
+    for n, r in enumerate(session.resources):
+        old_tgi, old = before[n]
+        if r.tgi() == old_tgi and s2package.same_bytes(old, r):
+            continue
+        comp = old_tgi in session.compressed
+        if r.tgi() != old_tgi:
+            session.compressed.discard(old_tgi)
+            if comp:
+                session.compressed.add(r.tgi())
+        changes.append(Change(old_tgi, old, s2package.copy(r), n, comp, comp))
+    if changes:
+        session.push(Step(f"Clone → 0x{report.new_guid:08X}", changes))
+
+    return {
+        "source_guid": report.source_guid, "new_guid": report.new_guid,
+        "resource_count": report.resource_count, "changed": len(changes),
+        "patches": [{"instance": p.instance, "bhav_name": p.bhav_name,
+                     "instr_index": p.instr_index, "opcode": p.opcode,
+                     "opcode_name": s2parser.PRIMITIVES.get(p.opcode, ""),
+                     "operand_offset": p.operand_offset,
+                     "known_layout": p.known_layout, "applied": p.applied}
+                    for p in report.patches],
+        "warnings": list(report.warnings),
+        **_summary(session),
+    }
+
+
+def m_scan_guids(session: Session, params: dict) -> dict:
+    """Every object GUID in the Downloads folder (or the folders given), and
+    which packages hold it. Reads only the OBJD entries, so a large
+    Downloads folder takes seconds rather than minutes."""
+    folders = [Path(p).expanduser() for p in params.get("folders", [])]
+    if not folders:
+        folders = [_game_root(params) / "Downloads"]
+    paths = [p for folder in folders if folder.is_dir()
+             for p in sorted(folder.rglob("*.package")) if not p.name.startswith(".")]
+    found: "dict[int, list[str]]" = {}
+    for n, path in enumerate(paths):
+        if n % 25 == 0:
+            _progress("scan_guids", n, len(paths), path.name)
+        try:
+            _, entries = s2parser.open_package(path)
+            for guid, _name in s2doctor.read_objd_guids(path, entries):
+                found.setdefault(guid, []).append(path.name)
+        except (OSError, ValueError, struct.error):
+            continue
+    _progress("scan_guids", len(paths), len(paths))
+    wanted = [int(g) for g in params.get("guids", [])]
+    return {
+        "packages": len(paths),
+        "guids": len(found),
+        "collisions": {str(g): found[g] for g in wanted if g in found},
+        "duplicates": {str(g): v for g, v in found.items() if len(v) > 1},
+    }
+
+
+def m_merge(session: Session, params: dict) -> dict:
+    """Bring another package's resources into this one."""
+    session.require_open()
+    other = load(Path(_need(params, "path")).expanduser())
+    on_conflict = params.get("on_conflict", "skip")
+    before_count = len(session.resources)
+    positions = {r.tgi(): n for n, r in enumerate(session.resources)}
+    olds = {r.tgi(): s2package.copy(r) for r in session.resources}
+    try:
+        report = s2tools.merge(session.resources, other.resources, on_conflict)
+    except ValueError as exc:
+        raise RpcError("bad_params", str(exc)) from None
+    changes = []
+    for tgi in report.added:
+        n = s2package.find(session.resources, tgi)
+        comp = tgi in other.compressed
+        if comp:
+            session.compressed.add(tgi)
+        changes.append(Change(tgi, None, s2package.copy(session.resources[n]), n, False, comp))
+    for tgi in report.replaced:
+        n = positions[tgi]
+        was = tgi in session.compressed
+        comp = tgi in other.compressed
+        (session.compressed.add if comp else session.compressed.discard)(tgi)
+        changes.append(Change(tgi, olds[tgi], s2package.copy(session.resources[n]), n, was, comp))
+    if changes:
+        session.push(Step(f"Merge {other.path.name}", changes))
+    return {"added": len(report.added), "replaced": len(report.replaced),
+            "skipped": len(report.skipped), "before": before_count, **_summary(session)}
+
+
+def m_split(session: Session, params: dict) -> dict:
+    """Write the given resources to a new package, optionally removing them."""
+    session.require_open()
+    dest = Path(_need(params, "path")).expanduser()
+    reason = protection_reason(dest)
+    if reason is not None:
+        raise RpcError("destination_protected", f"refusing to write {dest.name}: {reason}")
+    tgis = [s2package.parse_tgi(x) for x in _need(params, "tgis")]
+    try:
+        picked = s2tools.split(session.resources, tgis, remove=False)
+    except KeyError as exc:
+        raise RpcError("not_found", f"no resource {exc.args[0]}") from None
+    if not picked:
+        raise RpcError("bad_params", "nothing selected")
+    tmp = dest.with_name(dest.name + ".tmp")
+    try:
+        s2writer.write_package(tmp, picked, compress_tgis={r.tgi() for r in picked
+                                                           if r.tgi() in session.compressed})
+        os.replace(tmp, dest)
+    except (OSError, ValueError) as exc:
+        raise RpcError("write_failed", str(exc)) from None
+    if params.get("remove"):
+        m_delete_resource(session, {"tgis": [s2package.tgi_json(t) for t in tgis]})
+    return {"path": str(dest), "written": len(picked), **_summary(session)}
+
+
+def m_doctor(session: Session, params: dict) -> dict:
+    """Run s2doctor's checks and return its findings — the same ones
+    `s2doctor.py --json` prints — with progress along the way."""
+    root = _game_root(params)
+    downloads_only = bool(params.get("downloads_only", False))
+    hash_files = not params.get("no_hash", False)
+    top = int(params.get("top", 10))
+    findings = []
+    errors = []
+    infos = []
+    steps = 4
+    if not downloads_only:
+        _progress("doctor", 0, steps, "reading error logs")
+        logs = root / "Logs"
+        errors = s2doctor.scan_object_errors(logs)
+        findings += s2doctor.check_object_errors(errors, top)
+        findings += s2doctor.check_app_errors(logs)
+        findings += s2doctor.check_crash_reports()
+    _progress("doctor", 1, steps, "scanning Downloads")
+    downloads = root / "Downloads"
+    if downloads.is_dir():
+        infos = s2doctor.scan_packages(downloads, hash_files=hash_files)
+        findings += s2doctor.check_downloads_integrity(infos)
+        findings += s2doctor.check_inert_files(downloads)
+        if hash_files:
+            findings += s2doctor.check_duplicates(infos)
+        findings += s2doctor.check_tgi_conflicts(infos, top)
+        findings += s2doctor.check_guid_conflicts(infos, top)
+    else:
+        findings.append(s2doctor.Finding("info", "no-downloads",
+                                         "No Downloads folder — no custom content installed."))
+    _progress("doctor", 2, steps, "checking caches")
+    findings += s2doctor.check_caches(root)
+    if not downloads_only and not params.get("skip_saves", False):
+        _progress("doctor", 3, steps, "checking neighborhoods")
+        findings += s2doctor.check_neighborhoods(root)
+    if errors and infos:
+        findings += s2doctor.check_error_mod_overlap(errors, infos, int(params.get("recent", 5)))
+    _progress("doctor", steps, steps)
+    findings.sort(key=lambda f: s2doctor.SEVERITY_ORDER[f.severity])
+    return {"root": str(root), "packages": len(infos),
+            "findings": [f.to_dict() for f in findings]}
+
+
+PREVIEW_MAX_SIDE = 1024   # decode a smaller mip for the pane; export keeps the full one
+
+
+def m_preview_texture(session: Session, params: dict) -> dict:
+    session.require_open()
+    r = session.require(_tgi(params))
+    if r.type_id not in TEXTURE_TYPES:
+        raise RpcError("bad_params", f"{r.type_name} is not a texture")
+    try:
+        texture = s2texture.load_texture(session.resources, r)
+        level = next((l for l in texture.levels
+                      if l.resolved and max(l.width, l.height) <= PREVIEW_MAX_SIDE), None)
+        if level is None:
+            raise ValueError("no decodable mip level is stored in this package (all in LIFOs?)")
+        rgba = s2texture.decode(level, texture.format)
+        png = s2texture.png_bytes(level.width, level.height, rgba)
+    except (ValueError, struct.error, IndexError) as exc:
+        raise RpcError("decode_failed", str(exc), {"type_name": r.type_name}) from None
+    return {"name": texture.name, "width": texture.width, "height": texture.height,
+            "format": texture.format_name, "levels": len(texture.levels),
+            "shown_width": level.width, "shown_height": level.height,
+            "png_b64": base64.b64encode(png).decode("ascii")}
+
+
+def m_export_texture(session: Session, params: dict) -> dict:
+    session.require_open()
+    r = session.require(_tgi(params))
+    dest = Path(_need(params, "path")).expanduser()
+    if is_protected(dest):
+        raise RpcError("destination_protected", f"refusing to write inside {dest.parent}")
+    try:
+        w, h = s2texture.export_png(s2texture.load_texture(session.resources, r), dest)
+    except (ValueError, struct.error, IndexError, OSError) as exc:
+        raise RpcError("decode_failed", str(exc)) from None
+    return {"path": str(dest), "width": w, "height": h}
+
+
+def m_preview_mesh(session: Session, params: dict) -> dict:
+    """A GMDC as Wavefront OBJ text. The reader is partial — about half the
+    game's meshes parse — and says so rather than guessing."""
+    session.require_open()
+    r = session.require(_tgi(params))
+    if r.type_id != s2mesh.TYPE_GMDC:
+        raise RpcError("bad_params", f"{r.type_name} is not a mesh")
+    try:
+        mesh = s2mesh.parse_gmdc(r.data)
+        obj = s2mesh.to_obj(mesh)
+    except (ValueError, struct.error, IndexError) as exc:
+        raise RpcError("decode_failed", f"GMDC reader is partial and could not read this one: {exc}",
+                       {"type_name": r.type_name}) from None
+    return {"name": mesh.filename, "obj": obj, "faces": mesh.total_faces(),
+            "groups": [{"name": g.name, "faces": g.face_count} for g in mesh.groups],
+            "partial": True}
+
+
 def m_bhav_meta(session: Session, params: dict) -> dict:
     """Everything the BHAV editor needs to label things: primitive names,
     the operand layouts s2object has pinned, and the exit sentinels."""
@@ -774,6 +1078,16 @@ METHODS = {
     "import_resource": m_import_resource,
     "bhav_meta": m_bhav_meta,
     "bhav_transform": m_bhav_transform,
+    "objects": m_objects,
+    "derive_guid": m_derive_guid,
+    "clone": m_clone,
+    "scan_guids": m_scan_guids,
+    "merge": m_merge,
+    "split": m_split,
+    "doctor": m_doctor,
+    "preview_texture": m_preview_texture,
+    "export_texture": m_export_texture,
+    "preview_mesh": m_preview_mesh,
     "shutdown": m_shutdown,
 }
 
@@ -810,6 +1124,8 @@ def serve(stdin=None, stdout=None) -> int:
         stdout.write(json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n")
         stdout.flush()
 
+    global EMIT
+    EMIT = send
     send({"event": "ready", "protocol": PROTOCOL_VERSION, "python": sys.version.split()[0]})
     for raw in stdin:
         line = raw.strip()

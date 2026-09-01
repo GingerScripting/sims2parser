@@ -9,6 +9,7 @@ struct DetailPane: View {
     enum Tab: String, CaseIterable, Identifiable {
         case decoded = "Decoded"
         case bhav = "Tree"
+        case preview = "Preview"
         case hex = "Hex"
         var id: String { rawValue }
     }
@@ -76,6 +77,8 @@ struct DetailPane: View {
             }
         case .bhav:
             if let b = d.bhav { BhavTextView(render: b) } else { HexView(bytes: d.bytes) }
+        case .preview:
+            PreviewPane(session: session, detail: d)
         case .hex:
             HexView(bytes: d.bytes)
         }
@@ -85,6 +88,7 @@ struct DetailPane: View {
         var t: [Tab] = []
         if d.row.decodable { t.append(.decoded) }
         if d.bhav != nil { t.append(.bhav) }
+        if d.row.hasPreview { t.append(.preview) }
         t.append(.hex)
         return t
     }

@@ -247,6 +247,34 @@ def main() -> int:
                 print(f"BHAV {got['decoded']['name']!r}: {n} instructions, "
                       f"format 0x{got['decoded']['format_version']:04X}; transform/apply/undo OK")
 
+            # Object Workshop and tools, on the same scratch copy.
+            objs = c.call("objects")["objects"]
+            if objs:
+                o = objs[0]
+                before_guid = o["guid"]
+                r = c.call("clone", name="Smoke Clone", select_guid=o["guid"], price=7)
+                assert r["new_guid"] != before_guid and r["changed"] >= 1 and r["can_undo"]
+                assert c.call("objects")["objects"][0]["guid"] == r["new_guid"]
+                c.call("undo")
+                assert c.call("objects")["objects"][0]["guid"] == before_guid, "clone undo"
+                c.call("redo")
+                scan = c.call("scan_guids", folders=[str(tmp)], guids=[r["new_guid"]])
+                assert scan["packages"] >= 1 and str(r["new_guid"]) not in scan["collisions"]
+                print(f"clone 0x{before_guid:08X} -> 0x{r['new_guid']:08X}: {r['changed']} changed, "
+                      f"{sum(p['applied'] for p in r['patches'])}/{len(r['patches'])} BHAV patches; scan OK")
+            count = c.call("status")["count"]
+            m = c.call("merge", path=str(donor), on_conflict="skip")
+            assert m["added"] == 0 and m["skipped"] == count, m
+            part = tmp / "part.package"
+            first = c.call("index")["rows"][:2]
+            sp = c.call("split", path=str(part), tgis=[dict(zip(cols, x)) for x in first], remove=True)
+            assert sp["written"] == 2 and sp["count"] == count - 2 and part.is_file(), sp
+            c.call("undo")
+            assert c.call("status")["count"] == count
+            expect_error("destination_protected", c.call, "split", path=str(hood_dir / "x.package"),
+                         tgis=[dict(zip(cols, first[0]))])
+            print("merge (all skipped), split 2 + undo, protected split refused")
+
             expect_error("unknown_method", c.call, "frobnicate")
             expect_error("bad_params", c.call, "get_resource", tgi="nope")
         finally:

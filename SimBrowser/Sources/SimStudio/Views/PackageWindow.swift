@@ -10,7 +10,10 @@ struct PackageRoot: View {
 
     init(url: URL) {
         _session = StateObject(wrappedValue: PackageSession(url: url))
-        trace("PackageRoot init \(url.lastPathComponent)")
+        trace("PackageRoot init \(url.absoluteString)")
+        if ProcessInfo.processInfo.environment["SIMSTUDIO_TRACE_STACK"] != nil {
+            trace(Thread.callStackSymbols.prefix(40).joined(separator: "\n"))
+        }
     }
 
     var body: some View {
@@ -38,6 +41,7 @@ struct PackageWindow: View {
     @State private var filter: TreeFilter = .all
     @State private var search = ""
     @State private var showNewResource = false
+    @State private var tool: Tool?
 
     var body: some View {
         Group {
@@ -70,6 +74,14 @@ struct PackageWindow: View {
         .sheet(isPresented: $showNewResource) {
             NewResourceSheet(session: session)
         }
+        .sheet(item: $tool) { tool in
+            switch tool {
+            case .clone: CloneSheet(session: session)
+            case .merge: MergeSheet(session: session)
+            case .split(let tgis): SplitSheet(session: session, tgis: tgis)
+            case .doctor: DoctorSheet(session: session)
+            }
+        }
     }
 
     private var content: some View {
@@ -81,7 +93,9 @@ struct PackageWindow: View {
                 TypeTree(rows: session.rows, selection: $filter)
                     .frame(width: 240)
                 Divider()
-                ResourceTable(session: session, rows: filteredRows, onNewResource: { showNewResource = true })
+                ResourceTable(session: session, rows: filteredRows,
+                              onNewResource: { showNewResource = true },
+                              onSplit: { tool = .split($0) })
                     .frame(minWidth: 460)
                 Divider()
                 DetailPane(session: session)
@@ -100,6 +114,17 @@ struct PackageWindow: View {
                     .help(session.redoLabel)
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                Menu {
+                    Button("Clone Object…") { tool = .clone }
+                    Button("Merge Package Into This…") { tool = .merge }
+                    Button("Split Selection to New Package…") { tool = .split(Array(session.selectedTGIs)) }
+                        .disabled(session.selectedTGIs.isEmpty)
+                    Divider()
+                    Button("Check the Game Folder…") { tool = .doctor }
+                } label: {
+                    Label("Tools", systemImage: "wrench.and.screwdriver")
+                }
+                .help("Object Workshop, merge, split, and the doctor")
                 Button { showNewResource = true } label: { Label("New Resource", systemImage: "plus") }
                     .help("Add an empty resource")
                 Menu {

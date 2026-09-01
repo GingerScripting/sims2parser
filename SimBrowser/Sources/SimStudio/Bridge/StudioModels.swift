@@ -60,15 +60,40 @@ struct ResourceRow: Decodable, Identifiable, Hashable {
     let compressed: Bool
     let decodable: Bool
     let bhav: Bool
+    let flags: Int
 
     enum CodingKeys: String, CodingKey {
-        case type, group, instance, size, compressed, decodable, bhav
+        case type, group, instance, size, compressed, decodable, bhav, flags
         case typeName = "type_name"
         case instanceHi = "instance_hi"
     }
 
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(UInt32.self, forKey: .type)
+        typeName = try c.decode(String.self, forKey: .typeName)
+        group = try c.decode(UInt32.self, forKey: .group)
+        instance = try c.decode(UInt32.self, forKey: .instance)
+        instanceHi = try c.decode(UInt32.self, forKey: .instanceHi)
+        size = try c.decode(Int.self, forKey: .size)
+        compressed = try c.decode(Bool.self, forKey: .compressed)
+        decodable = try c.decode(Bool.self, forKey: .decodable)
+        bhav = try c.decode(Bool.self, forKey: .bhav)
+        flags = try c.decodeIfPresent(Int.self, forKey: .flags) ?? 0
+    }
+
+    init(type: UInt32, typeName: String, group: UInt32, instance: UInt32, instanceHi: UInt32,
+         size: Int, compressed: Bool, decodable: Bool, bhav: Bool, flags: Int) {
+        self.type = type; self.typeName = typeName; self.group = group; self.instance = instance
+        self.instanceHi = instanceHi; self.size = size; self.compressed = compressed
+        self.decodable = decodable; self.bhav = bhav; self.flags = flags
+    }
+
     var tgi: TGI { TGI(type: type, group: group, instance: instance, instanceHi: instanceHi) }
     var id: TGI { tgi }
+    var isTexture: Bool { flags & 8 != 0 }
+    var isMesh: Bool { flags & 16 != 0 }
+    var hasPreview: Bool { isTexture || isMesh }
 
     /// Build the table from the daemon's compact `index` reply:
     /// `{"columns": [...], "rows": [[type, group, instance, hi, size, flags]], "type_names": {...}}`.
@@ -87,7 +112,7 @@ struct ResourceRow: Decodable, Identifiable, Hashable {
             else { continue }
             out.append(ResourceRow(type: t, typeName: names[String(t)] ?? hex8(t), group: g, instance: i,
                                    instanceHi: hi, size: size, compressed: flags & 1 != 0,
-                                   decodable: flags & 2 != 0, bhav: flags & 4 != 0))
+                                   decodable: flags & 2 != 0, bhav: flags & 4 != 0, flags: flags))
         }
         return out
     }
@@ -274,5 +299,179 @@ struct Meta: Decodable {
     var knownTypes: [(id: UInt32, name: String)] {
         typeNames.compactMap { k, v in UInt32(k).map { (id: $0, name: v) } }
             .sorted { $0.name.lowercased() < $1.name.lowercased() }
+    }
+}
+
+// MARK: - Object Workshop and tools
+
+struct ObjectInfo: Decodable, Identifiable, Hashable {
+    let index: Int
+    let instance: UInt32
+    let group: UInt32
+    let guid: UInt32
+    let originalGuid: UInt32
+    let filename: String
+    let name: String
+    let price: Int
+    let ttabId: Int
+    let ctssId: Int
+    var id: Int { index }
+
+    enum CodingKeys: String, CodingKey {
+        case index, instance, group, guid, filename, name, price
+        case originalGuid = "original_guid"
+        case ttabId = "ttab_id"
+        case ctssId = "ctss_id"
+    }
+}
+
+struct ObjectsResult: Decodable {
+    let objects: [ObjectInfo]
+}
+
+struct ClonePatch: Decodable, Identifiable {
+    let instance: Int
+    let bhavName: String
+    let instrIndex: Int
+    let opcode: Int
+    let opcodeName: String
+    let operandOffset: Int
+    let knownLayout: Bool
+    let applied: Bool
+    var id: String { "\(instance)/\(instrIndex)/\(operandOffset)" }
+
+    enum CodingKeys: String, CodingKey {
+        case instance, opcode, applied
+        case bhavName = "bhav_name"
+        case instrIndex = "instr_index"
+        case opcodeName = "opcode_name"
+        case operandOffset = "operand_offset"
+        case knownLayout = "known_layout"
+    }
+}
+
+struct CloneResult: Decodable {
+    let sourceGuid: UInt32
+    let newGuid: UInt32
+    let resourceCount: Int
+    let changed: Int
+    let patches: [ClonePatch]
+    let warnings: [String]
+    let summary: PackageSummary
+
+    enum CodingKeys: String, CodingKey {
+        case changed, patches, warnings
+        case sourceGuid = "source_guid"
+        case newGuid = "new_guid"
+        case resourceCount = "resource_count"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sourceGuid = try c.decode(UInt32.self, forKey: .sourceGuid)
+        newGuid = try c.decode(UInt32.self, forKey: .newGuid)
+        resourceCount = try c.decode(Int.self, forKey: .resourceCount)
+        changed = try c.decode(Int.self, forKey: .changed)
+        patches = try c.decode([ClonePatch].self, forKey: .patches)
+        warnings = try c.decode([String].self, forKey: .warnings)
+        summary = try PackageSummary(from: decoder)
+    }
+}
+
+struct ScanResult: Decodable {
+    let packages: Int
+    let guids: Int
+    let collisions: [String: [String]]
+    let duplicates: [String: [String]]
+}
+
+struct MergeResult: Decodable {
+    let added: Int
+    let replaced: Int
+    let skipped: Int
+    let summary: PackageSummary
+    enum CodingKeys: String, CodingKey { case added, replaced, skipped }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        added = try c.decode(Int.self, forKey: .added)
+        replaced = try c.decode(Int.self, forKey: .replaced)
+        skipped = try c.decode(Int.self, forKey: .skipped)
+        summary = try PackageSummary(from: decoder)
+    }
+}
+
+struct SplitResult: Decodable {
+    let path: String
+    let written: Int
+    let summary: PackageSummary
+    enum CodingKeys: String, CodingKey { case path, written }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        written = try c.decode(Int.self, forKey: .written)
+        summary = try PackageSummary(from: decoder)
+    }
+}
+
+struct Finding: Decodable, Identifiable {
+    let severity: String
+    let code: String
+    let title: String
+    let detail: [String]
+    let fix: String?
+    let id = UUID()
+    enum CodingKeys: String, CodingKey { case severity, code, title, detail, fix }
+}
+
+struct DoctorResult: Decodable {
+    let root: String
+    let packages: Int
+    let findings: [Finding]
+}
+
+struct TexturePreview: Decodable {
+    let name: String
+    let width: Int
+    let height: Int
+    let format: String
+    let levels: Int
+    let shownWidth: Int
+    let shownHeight: Int
+    let pngB64: String
+
+    enum CodingKeys: String, CodingKey {
+        case name, width, height, format, levels
+        case shownWidth = "shown_width"
+        case shownHeight = "shown_height"
+        case pngB64 = "png_b64"
+    }
+}
+
+struct MeshPreview: Decodable {
+    struct Group: Decodable, Identifiable {
+        let name: String
+        let faces: Int
+        var id: String { name }
+    }
+    let name: String
+    let obj: String
+    let faces: Int
+    let groups: [Group]
+    let partial: Bool
+}
+
+/// A server progress event.
+struct Progress: Equatable {
+    let op: String
+    let done: Int
+    let total: Int
+    let note: String
+
+    init?(_ value: JSONValue) {
+        guard value["event"]?.stringValue == "progress", let op = value["op"]?.stringValue else { return nil }
+        self.op = op
+        done = value["done"]?.intValue ?? 0
+        total = value["total"]?.intValue ?? 0
+        note = value["note"]?.stringValue ?? ""
     }
 }
