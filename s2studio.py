@@ -456,9 +456,30 @@ def m_status(session: Session, params: dict) -> dict:
     return _summary(session)
 
 
-def m_index(session: Session, params: dict) -> list:
+INDEX_COLUMNS = ["type", "group", "instance", "instance_hi", "size", "flags"]
+FLAG_COMPRESSED, FLAG_DECODABLE, FLAG_BHAV = 1, 2, 4
+
+
+def m_index(session: Session, params: dict) -> dict:
+    """The whole index, one short array per resource.
+
+    objects.package has 52,000 entries; as keyed objects that was 8.7 MB and
+    took the app seven seconds to decode. Arrays of numbers are a third the
+    size and parse in a fraction of that. `columns` names the positions and
+    `type_names` maps each type id present to its name.
+    """
     session.require_open()
-    return [_index_row(session, r) for r in session.resources]
+    rows = []
+    names = {}
+    for r in session.resources:
+        flags = ((FLAG_COMPRESSED if r.tgi() in session.compressed else 0)
+                 | (FLAG_DECODABLE if r.type_id in s2object.PARSERS else 0)
+                 | (FLAG_BHAV if r.type_id == s2object.TYPE_BHAV else 0))
+        rows.append([r.type_id, r.group_id, r.instance_id, r.instance_hi, s2package.size(r), flags])
+        if r.type_id not in names:
+            names[r.type_id] = r.type_name
+    return {"columns": INDEX_COLUMNS, "rows": rows,
+            "type_names": {str(k): v for k, v in names.items()}}
 
 
 def m_meta(session: Session, params: dict) -> dict:

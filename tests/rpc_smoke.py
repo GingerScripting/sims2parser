@@ -116,11 +116,14 @@ def main() -> int:
             assert str(s2object.TYPE_STR) in map(str, meta["decodable_types"])
 
             index = c.call("index")
-            assert len(index) == info["count"]
-            row = next(r for r in index
-                       if r["type"] == s2object.TYPE_STR and r["decodable"])
+            assert len(index["rows"]) == info["count"]
+            cols = index["columns"]
+            rows = [dict(zip(cols, r)) for r in index["rows"]]
+            row = next(r for r in rows
+                       if r["type"] == s2object.TYPE_STR and r["flags"] & 2)
             tgi = {"type": row["type"], "group": row["group"],
                    "instance": row["instance"], "instance_hi": row["instance_hi"]}
+            assert index["type_names"][str(row["type"])] == "STR#"
 
             got = c.call("get_resource", tgi=tgi)
             assert got["decoded"] and got["decode_error"] is None, got
