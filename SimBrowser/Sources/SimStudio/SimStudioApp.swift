@@ -109,6 +109,21 @@ enum SavePanels {
         Task { await session.saveAs(url) }
     }
 
+    /// Copy Hood: choose (or create) an empty folder outside the game's
+    /// Neighborhoods tree; the daemon copies the hood folder into it and
+    /// writes the edited neighborhood package there.
+    static func hoodSaveAs(_ session: PackageSession) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Copy Here"
+        panel.message = "Choose an empty folder for the copy of \(session.hoodMeta?.hoodId ?? "the hood"). The game's Neighborhoods folder is refused."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await session.hoodSaveAs(url) }
+    }
+
     static func chooseExport(suggested: String) -> URL? {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggested

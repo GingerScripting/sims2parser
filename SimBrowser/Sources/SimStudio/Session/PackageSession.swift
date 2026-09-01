@@ -87,6 +87,7 @@ final class PackageSession: ObservableObject, Identifiable {
             summary = try await c.call("open", ["path": .string(url.path)], as: PackageSummary.self)
             rows = try ResourceRow.rows(fromIndex: await c.callRaw("index"))
             phase = .ready
+            await loadHoodMeta()
         } catch {
             phase = .failed("Could not open \(url.lastPathComponent) with \(python) \(script): "
                             + describe(error))
@@ -385,6 +386,69 @@ final class PackageSession: ObservableObject, Identifiable {
         guard let c = client else { return }
         do { _ = try await c.call("export_texture", ["tgi": tgi.json, "path": .string(url.path)], as: JSONValue.self) }
         catch { report(error) }
+    }
+
+    // MARK: Neighborhoods
+
+    @Published private(set) var hoodMeta: HoodMeta?
+    @Published private(set) var sims: [SimRow] = []
+    @Published private(set) var simsLoading = false
+
+    var isHood: Bool { hoodMeta?.isHood ?? false }
+
+    /// Ask whether this package is a neighborhood; cheap, called after open.
+    func loadHoodMeta() async {
+        guard let c = client, hoodMeta == nil else { return }
+        hoodMeta = try? await c.call("hood_meta", as: HoodMeta.self)
+    }
+
+    func loadSims() async {
+        guard let c = client, sims.isEmpty else { return }
+        simsLoading = true
+        defer { simsLoading = false }
+        do { sims = try await c.call("hood_sims", as: HoodSims.self).sims }
+        catch { report(error) }
+    }
+
+    func sim(_ nid: Int) async -> SimDetail? {
+        guard let c = client else { return nil }
+        do { return try await c.call("hood_sim", ["nid": .int(nid)], as: SimDetail.self) }
+        catch { report(error); return nil }
+    }
+
+    func putSim(_ nid: Int, fields: [String: Int]) async -> Bool {
+        await mutate {
+            let r = try await $0.call("hood_put_sim", ["nid": .int(nid),
+                "fields": .object(fields.mapValues { .int($0) })], as: PutResult.self)
+            self.summary = r.summary
+            self.sims = []                       // names and ages may have changed
+            await self.loadSims()
+        }
+    }
+
+    func putRelationship(owner: Int, target: Int, fields: [String: Int]) async -> Bool {
+        await mutate {
+            let r = try await $0.call("hood_put_srel", ["owner": .int(owner), "target": .int(target),
+                "fields": .object(fields.mapValues { .int($0) })], as: PutResult.self)
+            self.summary = r.summary
+        }
+    }
+
+    func putTokens(_ nid: Int, first: [SimToken], second: [SimToken]) async -> Bool {
+        await mutate {
+            let r = try await $0.call("hood_put_tokens", ["nid": .int(nid),
+                "first": .array(first.map(\.json)), "second": .array(second.map(\.json))], as: PutResult.self)
+            self.summary = r.summary
+        }
+    }
+
+    func hoodSaveAs(_ dir: URL) async -> Bool {
+        await mutate {
+            self.summary = try await $0.call("hood_save_as", ["dir": .string(dir.path)],
+                                             as: PackageSummary.self, timeout: 900)
+            self.sims = []
+            await self.loadSims()
+        }
     }
 
     // MARK: Plumbing

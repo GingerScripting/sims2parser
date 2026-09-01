@@ -43,6 +43,13 @@ struct PackageWindow: View {
     @State private var showNewResource = false
     @State private var tool: Tool?
 
+    enum Mode: String, CaseIterable, Identifiable {
+        case resources = "Resources"
+        case sims = "Sims"
+        var id: String { rawValue }
+    }
+    @State private var mode: Mode = .resources
+
     var body: some View {
         Group {
             switch session.phase {
@@ -89,23 +96,34 @@ struct PackageWindow: View {
             if session.isReadonly { readonlyBanner }
             // Deliberately an HStack, not NavigationSplitView — see Sim
             // Browser's ContentView for the macOS 26 measurement behind that.
-            HStack(spacing: 0) {
-                TypeTree(rows: session.rows, selection: $filter)
-                    .frame(width: 240)
-                Divider()
-                ResourceTable(session: session, rows: filteredRows,
-                              onNewResource: { showNewResource = true },
-                              onSplit: { tool = .split($0) })
-                    .frame(minWidth: 460)
-                Divider()
-                DetailPane(session: session)
-                    .frame(minWidth: 440, maxWidth: .infinity)
+            if mode == .sims && session.isHood {
+                SimsPane(session: session)
+            } else {
+                HStack(spacing: 0) {
+                    TypeTree(rows: session.rows, selection: $filter)
+                        .frame(width: 240)
+                    Divider()
+                    ResourceTable(session: session, rows: filteredRows,
+                                  onNewResource: { showNewResource = true },
+                                  onSplit: { tool = .split($0) })
+                        .frame(minWidth: 460)
+                    Divider()
+                    DetailPane(session: session)
+                        .frame(minWidth: 440, maxWidth: .infinity)
+                }
             }
             Divider()
             statusBar
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
+                if session.isHood {
+                    Picker("Mode", selection: $mode) {
+                        ForEach(Mode.allCases) { m in Text(m.rawValue).tag(m) }
+                    }
+                    .pickerStyle(.segmented)
+                    .help("A neighborhood package: browse its resources, or edit its sims")
+                }
                 Button { Task { await session.undo() } } label: { Label(session.undoLabel, systemImage: "arrow.uturn.backward") }
                     .disabled(!session.canUndo)
                     .help(session.undoLabel)
@@ -139,6 +157,10 @@ struct PackageWindow: View {
                     .help(session.isReadonly ? "Read-only — use Save As" : "Save")
                 Button { SavePanels.saveAs(session) } label: { Label("Save As…", systemImage: "square.and.arrow.down.on.square") }
                     .help("Write a copy elsewhere")
+                if session.isHood {
+                    Button { SavePanels.hoodSaveAs(session) } label: { Label("Copy Hood…", systemImage: "folder.badge.plus") }
+                        .help("Copy the whole neighborhood folder elsewhere with the edits applied")
+                }
             }
         }
         .searchable(text: $search, placement: .toolbar, prompt: "Filter by group, instance, or type")
@@ -147,7 +169,8 @@ struct PackageWindow: View {
     private var readonlyBanner: some View {
         HStack(spacing: 8) {
             Image(systemName: "lock.fill")
-            Text("Read-only: \(session.summary?.readonlyReason ?? ""). Edits stay in memory; use Save As to write a copy elsewhere.")
+            Text("Read-only: \(session.summary?.readonlyReason ?? ""). Edits stay in memory; use "
+                 + (session.isHood ? "Copy Hood to write a copy of the whole neighborhood elsewhere." : "Save As to write a copy elsewhere."))
                 .font(.callout)
             Spacer()
         }

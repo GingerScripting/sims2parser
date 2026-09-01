@@ -244,3 +244,154 @@ def sim_badges(ngbh: dict) -> dict[int, dict[str, dict]]:
 # package — see s2luastate. Two searches here came up empty before that turned
 # up: no token in a sim's group encodes the state, and no token GUID is shared
 # by a neighborhood's business owners while staying rare elsewhere.
+
+
+# --- byte-exact round trip ---------------------------------------------------
+#
+# parse_ngbh above is a reader: it flattens each group's two token lists and
+# drops the ten unread bytes in every token header, which is fine for
+# reporting and useless for writing back. The pair below keeps everything —
+# the header before the first group, both lists, the unread bytes, and the
+# trailing word — so that build_ngbh_rt(parse_ngbh_rt(d)) == d. A store the
+# reader had to resync past is refused rather than rebuilt with a hole.
+
+class NgbhToken:
+    __slots__ = ("guid", "raw", "values")
+
+    def __init__(self, guid: int, raw: bytes, values: "list[int]"):
+        self.guid = guid
+        self.raw = raw            # the 10 bytes between the GUID and the count
+        self.values = values
+
+
+class NgbhGroup:
+    __slots__ = ("gid", "first", "second", "extra")
+
+    def __init__(self, gid: int, first: "list[NgbhToken]", second: "list[NgbhToken]",
+                 extra: bytes = b""):
+        self.gid = gid
+        self.first = first
+        self.second = second
+        # A few groups (3 of 808 in Strangetown) carry one extra u32 after
+        # their second list; what it means is not pinned, so it is kept raw.
+        self.extra = extra
+
+    @property
+    def tokens(self) -> "list[NgbhToken]":
+        return self.first + self.second
+
+
+class NgbhStore:
+    __slots__ = ("header", "groups", "tail")
+
+    def __init__(self, header: bytes, groups: "list[NgbhGroup]", tail: bytes):
+        self.header = header      # everything before the first group marker
+        self.groups = groups
+        self.tail = tail          # everything after the last group
+
+    def sections(self) -> "dict[str, list[NgbhGroup]]":
+        """{'lots'|'families'|'sims': groups}, split where ids stop increasing."""
+        out: "list[list[NgbhGroup]]" = []
+        for g in self.groups:
+            if not out or g.gid <= out[-1][-1].gid:
+                out.append([])
+            out[-1].append(g)
+        return dict(zip(("lots", "families", "sims"), out))
+
+    def group(self, section: str, gid: int) -> "NgbhGroup | None":
+        for g in self.sections().get(section, []):
+            if g.gid == gid:
+                return g
+        return None
+
+
+def _read_tokens_rt(d: bytes, pos: int, count: int):
+    tokens = []
+    for _ in range(count):
+        if pos + _TOKEN_HEADER > len(d):
+            raise ValueError(f"token header runs past the end at 0x{pos:X}")
+        guid, = struct.unpack_from("<I", d, pos)
+        n, = struct.unpack_from("<I", d, pos + 14)
+        end = pos + _TOKEN_HEADER + n * 2
+        if n > _MAX_TOKEN_VALUES or end > len(d):
+            raise ValueError(f"token at 0x{pos:X} claims {n} values")
+        tokens.append(NgbhToken(guid, d[pos + 4:pos + 14],
+                                list(struct.unpack_from(f"<{n}H", d, pos + _TOKEN_HEADER))))
+        pos = end
+    return tokens, pos
+
+
+def parse_ngbh_rt(d: bytes) -> NgbhStore:
+    """Parse an NGBH so that build_ngbh_rt reproduces it byte for byte.
+
+    Raises ValueError where parse_ngbh would resync: a store with a hole in
+    it cannot be rebuilt faithfully, so it stays read-only in the editor.
+    """
+    start = _find_first_group(d)
+    if start < 0:
+        raise ValueError("no token groups found")
+
+    def read_group(pos: int):
+        """(group, end) if a whole group parses at pos, else None."""
+        if pos + 12 > len(d):
+            return None
+        gid, marker, first = struct.unpack_from("<III", d, pos)
+        if marker != GROUP_MARKER or first > _MAX_TOKEN_VALUES:
+            return None
+        try:
+            listed, q = _read_tokens_rt(d, pos + 12, first)
+            if q + 4 > len(d):
+                return None
+            second, = struct.unpack_from("<I", d, q)
+            if second > _MAX_TOKEN_VALUES:
+                return None
+            rest, end = _read_tokens_rt(d, q + 4, second)
+        except ValueError:
+            return None
+        return NgbhGroup(gid, listed, rest), end
+
+    groups: "list[NgbhGroup]" = []
+    pos = start
+    while True:
+        parsed = read_group(pos)
+        if parsed is None:
+            break
+        group, end = parsed
+        # Anything between this group and the next parseable header is the
+        # group's trailing word(s). Bounded, so a corrupt store cannot be
+        # swallowed into one group's extra field and mistaken for healthy.
+        p = end
+        while p + 12 <= len(d) and read_group(p) is None and p - end < 16:
+            p += 4
+        if p + 12 <= len(d) and read_group(p) is None:
+            raise ValueError(f"cannot follow the store past group {group.gid} at 0x{end:X}")
+        group.extra = d[end:p]
+        groups.append(group)
+        pos = p
+    if not groups:
+        raise ValueError("no token groups parsed")
+    return NgbhStore(d[:start], groups, d[pos:])
+
+
+def _emit_tokens(tokens: "list[NgbhToken]") -> bytes:
+    out = bytearray()
+    for t in tokens:
+        if len(t.raw) != 10:
+            raise ValueError("token raw field must be 10 bytes")
+        if len(t.values) > _MAX_TOKEN_VALUES:
+            raise ValueError(f"token 0x{t.guid:08X} has {len(t.values)} values")
+        out += struct.pack("<I", t.guid) + t.raw + struct.pack("<I", len(t.values))
+        out += struct.pack(f"<{len(t.values)}H", *[v & 0xFFFF for v in t.values])
+    return bytes(out)
+
+
+def build_ngbh_rt(store: NgbhStore) -> bytes:
+    """Serialize an NgbhStore. Inverse of parse_ngbh_rt."""
+    out = bytearray(store.header)
+    for g in store.groups:
+        out += struct.pack("<III", g.gid, GROUP_MARKER, len(g.first))
+        out += _emit_tokens(g.first)
+        out += struct.pack("<I", len(g.second))
+        out += _emit_tokens(g.second)
+        out += g.extra
+    return bytes(out + store.tail)

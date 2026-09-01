@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import struct
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -611,7 +612,11 @@ def main():
     ap.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     ap.add_argument("--hood", help="only this neighborhood (e.g. N002)")
     ap.add_argument("--out", type=Path, help="output JSON path (default: stdout)")
+    ap.add_argument("--selftest", type=Path, metavar="HOOD_DIR",
+                    help="check that the SDSC/SREL field builders reproduce every record byte for byte")
     args = ap.parse_args()
+    if args.selftest:
+        sys.exit(_selftest_fields(args.selftest))
 
     if args.hood:
         data = {"hoods": [h for h in [extract_hood(args.root / args.hood)] if h]}
@@ -625,6 +630,166 @@ def main():
         print(f"Wrote {len(data['hoods'])} neighborhoods, {n} sims → {args.out}")
     else:
         print(text)
+
+
+
+
+# ---------------------------------------------------------------------------
+# Editable views: SDSC and SREL as named fields over the original bytes
+# ---------------------------------------------------------------------------
+#
+# parse_sdsc above is the extractor's reader — it resolves names and drops
+# the offsets. The editor needs the reverse: a field table it can show, and
+# a builder that writes only the named offsets over a copy of the original
+# record, so every byte the table does not name survives untouched. The
+# offsets are the ones parse_sdsc reads; nothing here is a new discovery.
+
+# (offset, struct format, name, kind). kind: "id" fields are shown but
+# refused on write; "flags" carry a bit table; "enum" a value table.
+SDSC_FIELDS = [
+    (0x1A4, "<H", "nid", "id"),
+    (0x1A6, "<I", "guid", "id"),
+    (0x86, "<H", "family_id", "int"),
+    (0x80, "<H", "age_stage", "enum:age"),
+    (0x8E, "<H", "gender", "enum:gender"),
+    (0x98, "<H", "zodiac", "enum:zodiac"),
+    (0x68, "<H", "aspiration_flags", "flags:aspiration"),
+    (0x14C, "<h", "aspiration_score", "int"),
+    (0xBE, "<I", "career_guid", "enum:career"),
+    (0x7E, "<H", "career_level", "int"),
+    (0x8A, "<h", "job_performance", "int"),
+    (0x15A, "<I", "retired_guid", "enum:career"),
+    (0x15E, "<H", "retired_level", "int"),
+    (0x160, "<I", "major_guid", "enum:major"),
+    (0x168, "<H", "semester", "int"),
+    (0x16A, "<H", "on_campus", "bool"),
+    (0x7C, "<H", "grade", "int"),
+    (0x38, "<h", "pref_male", "int"),
+    (0x3A, "<h", "pref_female", "int"),
+    (0x94, "<H", "ghost_flags", "int"),
+    (0x142, "<H", "npc_type", "int"),
+    (0xB0, "<H", "fatness", "int"),
+    (0xAE, "<H", "body_flags", "int"),
+    (0xC2, "<h", "days_left", "int"),
+] + [(off, "<H", f"personality.{name}", "meter") for off, name in PERSONALITY] \
+  + [(off, "<H", f"skills.{name}", "meter") for off, name in SKILLS] \
+  + [(off, "<H", f"interests.{name}", "meter") for off, name in INTERESTS]
+
+SDSC_MIN_SIZE = 0x1AA
+
+# The tables the field kinds refer to, served to the editor by name.
+SDSC_TABLES = {
+    "age": AGE_STAGES,
+    "gender": {0: "Male", 1: "Female"},
+    "zodiac": ZODIAC,
+    "aspiration": dict(ASPIRATION_BITS),
+    "career": {guid: c["track"] for guid, c in CAREERS.items()},
+    "major": MAJORS,
+}
+
+
+def parse_sdsc_fields(d: bytes) -> dict:
+    """Every SDSC_FIELDS value by name, raw (no name resolution)."""
+    if len(d) < SDSC_MIN_SIZE:
+        raise ValueError(f"SDSC too short ({len(d)} bytes)")
+    return {name: struct.unpack_from(fmt, d, off)[0] for off, fmt, name, _kind in SDSC_FIELDS}
+
+
+def build_sdsc(original: bytes, fields: dict) -> bytes:
+    """`original` with the named fields written over it. Ids are refused;
+    unknown names are an error rather than silently ignored."""
+    if len(original) < SDSC_MIN_SIZE:
+        raise ValueError(f"SDSC too short ({len(original)} bytes)")
+    by_name = {name: (off, fmt, kind) for off, fmt, name, kind in SDSC_FIELDS}
+    out = bytearray(original)
+    for name, value in fields.items():
+        if name not in by_name:
+            raise ValueError(f"unknown SDSC field {name!r}")
+        off, fmt, kind = by_name[name]
+        if kind == "id":
+            if value != struct.unpack_from(fmt, original, off)[0]:
+                raise ValueError(f"{name} is the sim's identity and cannot be changed")
+            continue
+        try:
+            struct.pack_into(fmt, out, off, int(value))
+        except struct.error as exc:
+            raise ValueError(f"{name}: {exc}") from None
+    return bytes(out)
+
+
+# SREL: the relationship record a sim holds about another. Instance id is
+# owner << 16 | target. Offsets are the ones load_srel reads.
+SREL_FIELDS = [
+    (0x08, "<i", "daily", "int"),
+    (0x10, "<i", "lifetime", "int"),
+    (0x0C, "<B", "flags", "flags:relationship"),
+    (0x0D, "<B", "flags2", "int"),
+    (0x14, "<I", "family_rel", "enum:family_rel"),
+    (0x34, "<I", "bff", "bool"),
+]
+SREL_MIN_SIZE = 0x38
+SREL_TABLES = {
+    "relationship": dict(SREL_FLAG_BITS),
+    "family_rel": FAMILY_REL_CODES,
+}
+
+
+def parse_srel_fields(d: bytes) -> dict:
+    """The fields that fit this record — some SRELs are only 16 bytes."""
+    if len(d) < 0x0C:
+        raise ValueError(f"SREL too short ({len(d)} bytes)")
+    out = {}
+    for off, fmt, name, _kind in SREL_FIELDS:
+        if off + struct.calcsize(fmt) <= len(d):
+            out[name] = struct.unpack_from(fmt, d, off)[0]
+    return out
+
+
+def build_srel(original: bytes, fields: dict) -> bytes:
+    by_name = {name: (off, fmt) for off, fmt, name, _kind in SREL_FIELDS}
+    out = bytearray(original)
+    for name, value in fields.items():
+        if name not in by_name:
+            raise ValueError(f"unknown SREL field {name!r}")
+        off, fmt = by_name[name]
+        if off + struct.calcsize(fmt) > len(out):
+            raise ValueError(f"{name} lies past the end of this {len(out)}-byte record")
+        try:
+            struct.pack_into(fmt, out, off, int(value))
+        except struct.error as exc:
+            raise ValueError(f"{name}: {exc}") from None
+    return bytes(out)
+
+
+def _selftest_fields(nbr_dir: Path) -> int:
+    """build_sdsc(d, parse_sdsc_fields(d)) == d for every SDSC in a hood, and
+    the same for SREL. Run with --selftest DIR."""
+    npkg = next(nbr_dir.glob("*_Neighborhood.package"), None)
+    if npkg is None:
+        print(f"no neighborhood package in {nbr_dir}")
+        return 1
+    _, entries = open_package(npkg)
+    ok = bad = 0
+    with open(npkg, "rb") as f:
+        for e in entries:
+            if e.type_id == TID_SDSC:
+                d = read_resource(f, e)
+                if len(d) < SDSC_MIN_SIZE:
+                    continue
+                if build_sdsc(d, parse_sdsc_fields(d)) == d:
+                    ok += 1
+                else:
+                    bad += 1
+            elif e.type_id == TID_SREL:
+                d = read_resource(f, e)
+                if len(d) < 0x0C:
+                    continue
+                if build_srel(d, parse_srel_fields(d)) == d:
+                    ok += 1
+                else:
+                    bad += 1
+    print(f"field round-trip: {ok} ok, {bad} differ")
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

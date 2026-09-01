@@ -475,3 +475,133 @@ struct Progress: Equatable {
         note = value["note"]?.stringValue ?? ""
     }
 }
+
+// MARK: - Neighborhoods
+
+struct FieldDef: Decodable, Identifiable {
+    let name: String
+    let kind: String      // id | int | bool | meter | enum:<table> | flags:<table>
+    let offset: Int
+    let fmt: String
+    var id: String { name }
+
+    var table: String? {
+        let parts = kind.split(separator: ":", maxSplits: 1)
+        return parts.count == 2 ? String(parts[1]) : nil
+    }
+    var isEnum: Bool { kind.hasPrefix("enum:") }
+    var isFlags: Bool { kind.hasPrefix("flags:") }
+    var section: String {
+        if let dot = name.firstIndex(of: ".") { return String(name[..<dot]) }
+        return "profile"
+    }
+    var label: String {
+        let base = name.contains(".") ? String(name.split(separator: ".").last ?? "") : name
+        return base.replacingOccurrences(of: "_", with: " ")
+    }
+}
+
+struct HoodMeta: Decodable {
+    let isHood: Bool
+    let hoodId: String?
+    let sdscFields: [FieldDef]
+    let sdscTables: [String: [String: String]]
+    let srelFields: [FieldDef]
+    let srelTables: [String: [String: String]]
+    let memoryOwnerSlot: Int
+    let memorySubjectSlot: Int
+
+    enum CodingKeys: String, CodingKey {
+        case isHood = "is_hood"
+        case hoodId = "hood_id"
+        case sdscFields = "sdsc_fields"
+        case sdscTables = "sdsc_tables"
+        case srelFields = "srel_fields"
+        case srelTables = "srel_tables"
+        case memoryOwnerSlot = "memory_owner_slot"
+        case memorySubjectSlot = "memory_subject_slot"
+    }
+
+    /// Sorted (value, label) pairs for an enum/flags table.
+    func options(_ table: String, from tables: [String: [String: String]]) -> [(value: Int, label: String)] {
+        (tables[table] ?? [:]).compactMap { k, v in Int(k).map { (value: $0, label: v) } }
+            .sorted { $0.label.lowercased() < $1.label.lowercased() }
+    }
+}
+
+struct SimRow: Decodable, Identifiable, Hashable {
+    let nid: Int
+    let guid: UInt32
+    let first: String
+    let last: String
+    let age: String
+    let gender: String
+    let familyId: Int
+    let career: String
+    let careerTitle: String
+    let aspirations: [String]
+    let npcType: Int
+    let charFile: String
+    var id: Int { nid }
+    var fullName: String { [first, last].filter { !$0.isEmpty }.joined(separator: " ") }
+
+    enum CodingKeys: String, CodingKey {
+        case nid, guid, first, last, age, gender, career, aspirations
+        case familyId = "family_id"
+        case careerTitle = "career_title"
+        case npcType = "npc_type"
+        case charFile = "char_file"
+    }
+}
+
+struct HoodSims: Decodable {
+    let sims: [SimRow]
+    let characters: Int
+}
+
+struct Relationship: Decodable, Identifiable {
+    let target: Int
+    let name: String
+    let size: Int
+    let fields: [String: Int]
+    var id: Int { target }
+}
+
+struct SimToken: Decodable, Identifiable, Equatable {
+    var guid: UInt32
+    var name: String
+    var raw: String
+    var values: [Int]
+    var id: String { "\(guid)-\(raw)-\(values.map(String.init).joined(separator: ","))" }
+
+    var json: JSONValue {
+        .object(["guid": .number(Double(guid)), "raw": .string(raw), "values": .array(values.map { .int($0) })])
+    }
+}
+
+struct TokenGroup: Decodable {
+    let first: [SimToken]
+    let second: [SimToken]
+    let editable: Bool
+    let error: String?
+}
+
+struct SimDetail: Decodable {
+    let nid: Int
+    let tgi: TGI
+    let fields: [String: Int]
+    let resolved: JSONValue
+    let first: String
+    let last: String
+    let bio: String
+    let charFile: String
+    let relationships: [Relationship]
+    let tokens: TokenGroup
+
+    enum CodingKeys: String, CodingKey {
+        case nid, tgi, fields, resolved, first, last, bio, relationships, tokens
+        case charFile = "char_file"
+    }
+
+    var fullName: String { [first, last].filter { !$0.isEmpty }.joined(separator: " ") }
+}

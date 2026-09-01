@@ -280,8 +280,84 @@ def main() -> int:
         finally:
             c.close()
 
+    hood_smoke()
     print("rpc smoke: OK")
     return 0
+
+
+def find_hood() -> "Path | None":
+    """A neighborhood package readable from here: a save-diff snapshot first
+    (the game's own container is off-limits to a plain shell), then the
+    game folder if it happens to be readable."""
+    import s2doctor
+    for p in sorted(Path.home().glob("Documents/sims2-savediff/*/before/*_Neighborhood.package")):
+        return p
+    for root in s2doctor.ROOT_CANDIDATES:
+        try:
+            for p in sorted((root / "Neighborhoods").glob("N*/N*_Neighborhood.package")):
+                return p
+        except OSError:
+            continue
+    return None
+
+
+def hood_smoke() -> None:
+    """Sims, relationships, tokens, and a hood copy — on a real neighborhood
+    package when one is readable, skipped otherwise."""
+    import s2neighborhood
+    hood = find_hood()
+    if hood is None:
+        print("skip: no readable neighborhood package for the hood checks")
+        return
+    with tempfile.TemporaryDirectory(prefix="s2studio-hood-") as tmp:
+        tmp = Path(tmp)
+        c = Client()
+        try:
+            info = c.call("open", path=str(hood))
+            meta = c.call("hood_meta")
+            assert meta["is_hood"] and meta["sdsc_fields"] and meta["sdsc_tables"]["career"]
+            sims = c.call("hood_sims")["sims"]
+            assert sims, "no sims"
+            named = [s for s in sims if s["first"] and s["last"]]
+            sim = (named or sims)[0]
+            d = c.call("hood_sim", nid=sim["nid"])
+            assert d["fields"]["nid"] == sim["nid"] and "skills.Logic" in d["fields"]
+            before = d["fields"]["skills.Logic"]
+            if d["relationships"]:
+                rel = d["relationships"][0]
+                r = c.call("hood_put_srel", owner=sim["nid"], target=rel["target"],
+                           fields={"daily": (rel["fields"]["daily"] + 1) % 100})
+                assert r["changed"]
+            if d["tokens"]["editable"]:
+                r = c.call("hood_put_tokens", nid=sim["nid"], first=d["tokens"]["first"], second=d["tokens"]["second"])
+                assert not r["changed"], "rebuilding an unchanged token group must be a no-op"
+            # The sim edit goes last so one undo/redo pair targets exactly it.
+            r = c.call("hood_put_sim", nid=sim["nid"], fields={"skills.Logic": 1000 if before != 1000 else 999})
+            assert r["changed"] and r["undo_label"].startswith("Edit")
+            assert c.call("hood_sim", nid=sim["nid"])["fields"]["skills.Logic"] != before
+            expect_error("build_failed", c.call, "hood_put_sim", nid=sim["nid"], fields={"guid": 1})
+            c.call("undo")
+            assert c.call("hood_sim", nid=sim["nid"])["fields"]["skills.Logic"] == before
+            c.call("redo")
+            dest = tmp / "copy" / hood.parent.name
+            r = c.call("hood_save_as", dir=str(dest))
+            assert not r["readonly"] and not r["dirty"] and (dest / hood.name).is_file()
+            # A Neighborhoods folder that holds hoods is a save tree wherever
+            # it lives; one that holds nothing is just a folder.
+            fake = tmp / "Neighborhoods" / "N001"
+            fake.mkdir(parents=True)
+            shutil.copy(hood, fake / "N001_Neighborhood.package")
+            expect_error("destination_protected", c.call, "hood_save_as",
+                         dir=str(tmp / "Neighborhoods" / "N009"))
+            got = s2neighborhood.extract_hood(dest)
+            if got is not None:
+                s = next(x for x in got["sims"] if x["nid"] == sim["nid"])
+                assert s["skills"]["Logic"] != before
+            print(f"hood {hood.parent.name}: {len(sims)} sims; edited "
+                  f"{sim['first']} {sim['last']}".rstrip() + f" (nid {sim['nid']}), undo/redo, "
+                  f"copied to scratch and re-extracted")
+        finally:
+            c.close()
 
 
 def _roundtrip(decoded: dict):

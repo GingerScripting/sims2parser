@@ -267,6 +267,8 @@ class Session:
     # means inflating the resource, and objects.package has thousands, so
     # the answer is kept until an edit could have changed it.
     bhav_names: "dict[int, str] | None" = None
+    # Per-session lookups that are expensive to build (a hood's characters).
+    cache: dict = field(default_factory=dict)
 
     # -- history ----------------------------------------------------------
 
@@ -1013,6 +1015,271 @@ def m_preview_mesh(session: Session, params: dict) -> dict:
             "partial": True}
 
 
+# ---------------------------------------------------------------------------
+# Neighborhoods: sims, relationships, memories
+# ---------------------------------------------------------------------------
+#
+# A neighborhood package opens read-only (its folder is protected), and every
+# edit here goes through the same undo stack as any other resource. Save As
+# copies the whole hood folder somewhere else and writes the edited package
+# into the copy — the CLAUDE.md rule holds: nothing writes into a save.
+
+import shutil
+
+import s2neighborhood
+import s2ngbh
+
+_MEMORY_NAMES: "dict[int, str] | None" = None
+
+
+def _hood_dir(session: Session) -> "Path | None":
+    """The hood folder, if the open package is a neighborhood package."""
+    if session.path is None or not session.path.name.endswith("_Neighborhood.package"):
+        return None
+    return session.path.parent
+
+
+def _characters(session: Session) -> dict:
+    """guid -> {first, last, bio, file} from the hood's Characters folder,
+    read once per session (700 packages take a couple of seconds)."""
+    if "characters" not in session.cache:
+        d = _hood_dir(session)
+        session.cache["characters"] = (
+            s2neighborhood.load_characters(d / "Characters") if d else {})
+    return session.cache["characters"]
+
+
+def _memory_names() -> "dict[int, str]":
+    """Memory token GUID -> the memory object's name, from the game's own
+    objects.package ("Memory - Love - WooHoo" and friends). Empty when the
+    game install is not where s2doctor expects it."""
+    global _MEMORY_NAMES
+    if _MEMORY_NAMES is None:
+        names = {}
+        for root in ("/Applications/The Sims 2.app/Contents/Assets/TSData/Res/Objects",):
+            pkg = Path(root) / "objects.package"
+            if not pkg.is_file():
+                continue
+            try:
+                for r in load(pkg).resources:
+                    if r.type_id != s2object.TYPE_OBJD:
+                        continue
+                    try:
+                        o = s2object.parse_objd(r.data)
+                    except (ValueError, struct.error):
+                        continue
+                    if o.filename.startswith("Memory") or o.name.startswith("Memory"):
+                        names[o.guid] = o.name or o.filename
+            except RpcError:
+                continue
+        _MEMORY_NAMES = names
+    return _MEMORY_NAMES
+
+
+def _sdsc_resource(session: Session, nid: int) -> Resource:
+    for r in session.resources:
+        if r.type_id == s2neighborhood.TID_SDSC and r.instance_id == nid:
+            return r
+    for r in session.resources:
+        if (r.type_id == s2neighborhood.TID_SDSC
+                and s2package.size(r) >= s2neighborhood.SDSC_MIN_SIZE
+                and struct.unpack_from("<H", r.data, 0x1A4)[0] == nid):
+            return r
+    raise RpcError("not_found", f"no sim {nid}")
+
+
+def _sim_name(session: Session, sdsc: dict) -> str:
+    ch = _characters(session).get(sdsc["guid"], {})
+    return " ".join(x for x in (ch.get("first", ""), ch.get("last", "")) if x)
+
+
+def _ngbh_resource(session: Session) -> "Resource | None":
+    return next((r for r in session.resources if r.type_id == s2ngbh.TID_NGBH), None)
+
+
+def _tokens_json(tokens) -> list:
+    names = _memory_names()
+    return [{"guid": t.guid, "name": names.get(t.guid, ""), "raw": t.raw.hex(),
+             "values": list(t.values)} for t in tokens]
+
+
+def m_hood_meta(session: Session, params: dict) -> dict:
+    session.require_open()
+    d = _hood_dir(session)
+    return {
+        "is_hood": d is not None,
+        "hood_id": d.name if d else None,
+        "sdsc_fields": [{"name": n, "kind": k, "offset": off, "fmt": fmt}
+                        for off, fmt, n, k in s2neighborhood.SDSC_FIELDS],
+        "sdsc_tables": {k: {str(a): b for a, b in v.items()}
+                        for k, v in s2neighborhood.SDSC_TABLES.items()},
+        "srel_fields": [{"name": n, "kind": k, "offset": off, "fmt": fmt}
+                        for off, fmt, n, k in s2neighborhood.SREL_FIELDS],
+        "srel_tables": {k: {str(a): b for a, b in v.items()}
+                        for k, v in s2neighborhood.SREL_TABLES.items()},
+        "memory_owner_slot": s2ngbh.MEMORY_OWNER,
+        "memory_subject_slot": s2ngbh.MEMORY_SUBJECT,
+    }
+
+
+def m_hood_sims(session: Session, params: dict) -> dict:
+    """Every sim in the package, with names from the Characters folder."""
+    session.require_open()
+    sims = []
+    for r in session.resources:
+        if r.type_id != s2neighborhood.TID_SDSC or s2package.size(r) < s2neighborhood.SDSC_MIN_SIZE:
+            continue
+        s = s2neighborhood.parse_sdsc(r.data)
+        ch = _characters(session).get(s["guid"], {})
+        if s["age"] == "?0" and not ch:
+            continue
+        sims.append({"nid": s["nid"], "guid": s["guid"], "first": ch.get("first", ""),
+                     "last": ch.get("last", ""), "age": s["age"], "gender": s["gender"],
+                     "family_id": s["family_id"], "career": s["career"],
+                     "career_title": s["career_title"], "aspirations": s["aspirations"],
+                     "npc_type": s["npc_type"], "char_file": ch.get("file", "")})
+    sims.sort(key=lambda s: (s["last"].lower(), s["first"].lower(), s["nid"]))
+    return {"sims": sims, "characters": len(_characters(session))}
+
+
+def m_hood_sim(session: Session, params: dict) -> dict:
+    """One sim: raw fields, the extractor's resolved view, relationships,
+    and the token group (memories included)."""
+    session.require_open()
+    nid = int(_need(params, "nid"))
+    r = _sdsc_resource(session, nid)
+    fields = s2neighborhood.parse_sdsc_fields(r.data)
+    resolved = s2neighborhood.parse_sdsc(r.data)
+    ch = _characters(session).get(resolved["guid"], {})
+    names = {}
+    rels = []
+    for x in session.resources:
+        if x.type_id != s2neighborhood.TID_SREL or (x.instance_id >> 16) & 0xFFFF != nid:
+            continue
+        target = x.instance_id & 0xFFFF
+        if target == nid or s2package.size(x) < 0x0C:
+            continue
+        if target not in names:
+            try:
+                names[target] = _sim_name(session, s2neighborhood.parse_sdsc(_sdsc_resource(session, target).data))
+            except RpcError:
+                names[target] = ""
+        rels.append({"target": target, "name": names[target], "size": s2package.size(x),
+                     "fields": s2neighborhood.parse_srel_fields(x.data)})
+    rels.sort(key=lambda z: (-(z["fields"].get("lifetime", 0)), z["target"]))
+    tokens = {"first": [], "second": [], "editable": False, "error": None}
+    ngbh = _ngbh_resource(session)
+    if ngbh is not None:
+        try:
+            store = s2ngbh.parse_ngbh_rt(ngbh.data)
+            g = store.group("sims", nid)
+            tokens["editable"] = True
+            if g is not None:
+                tokens["first"] = _tokens_json(g.first)
+                tokens["second"] = _tokens_json(g.second)
+        except ValueError as exc:
+            tokens["error"] = str(exc)
+    return {"nid": nid, "tgi": s2package.tgi_json(r.tgi()), "fields": fields,
+            "resolved": resolved, "first": ch.get("first", ""), "last": ch.get("last", ""),
+            "bio": ch.get("bio", ""), "char_file": ch.get("file", ""),
+            "relationships": rels, "tokens": tokens}
+
+
+def m_hood_put_sim(session: Session, params: dict) -> dict:
+    session.require_open()
+    nid = int(_need(params, "nid"))
+    r = _sdsc_resource(session, nid)
+    try:
+        data = s2neighborhood.build_sdsc(r.data, _need(params, "fields"))
+    except (ValueError, TypeError) as exc:
+        raise RpcError("build_failed", str(exc)) from None
+    name = _sim_name(session, s2neighborhood.parse_sdsc(r.data)) or f"sim {nid}"
+    return m_put_resource(session, {"tgi": s2package.tgi_json(r.tgi()), "hex": data.hex(),
+                                    "label": f"Edit {name}"})
+
+
+def m_hood_put_srel(session: Session, params: dict) -> dict:
+    session.require_open()
+    owner = int(_need(params, "owner"))
+    target = int(_need(params, "target"))
+    instance = (owner << 16) | target
+    r = next((x for x in session.resources
+              if x.type_id == s2neighborhood.TID_SREL and x.instance_id == instance), None)
+    if r is None:
+        raise RpcError("not_found", f"sim {owner} holds no relationship record about {target}")
+    try:
+        data = s2neighborhood.build_srel(r.data, _need(params, "fields"))
+    except (ValueError, TypeError) as exc:
+        raise RpcError("build_failed", str(exc)) from None
+    return m_put_resource(session, {"tgi": s2package.tgi_json(r.tgi()), "hex": data.hex(),
+                                    "label": f"Edit relationship {owner}→{target}"})
+
+
+def m_hood_put_tokens(session: Session, params: dict) -> dict:
+    """Replace a sim's token group — both lists — in the NGBH."""
+    session.require_open()
+    nid = int(_need(params, "nid"))
+    ngbh = _ngbh_resource(session)
+    if ngbh is None:
+        raise RpcError("not_found", "this package has no NGBH token store")
+    try:
+        store = s2ngbh.parse_ngbh_rt(ngbh.data)
+    except ValueError as exc:
+        raise RpcError("unsupported_version", f"token store cannot be rebuilt faithfully: {exc}") from None
+
+    def tokens(items):
+        out = []
+        for i, t in enumerate(items or []):
+            try:
+                raw = bytes.fromhex(t.get("raw") or "00" * 10)
+                out.append(s2ngbh.NgbhToken(int(t["guid"]), raw, [int(v) for v in t.get("values", [])]))
+            except (KeyError, ValueError, TypeError) as exc:
+                raise RpcError("bad_params", f"token {i}: {exc}") from None
+        return out
+
+    g = store.group("sims", nid)
+    if g is None:
+        raise RpcError("not_found", f"sim {nid} has no token group; the store cannot grow one here")
+    g.first = tokens(params.get("first"))
+    g.second = tokens(params.get("second"))
+    try:
+        data = s2ngbh.build_ngbh_rt(store)
+    except ValueError as exc:
+        raise RpcError("build_failed", str(exc)) from None
+    return m_put_resource(session, {"tgi": s2package.tgi_json(ngbh.tgi()), "hex": data.hex(),
+                                    "label": f"Edit tokens of sim {nid}"})
+
+
+def m_hood_save_as(session: Session, params: dict) -> dict:
+    """Copy the whole hood folder to `dir` and write the edited neighborhood
+    package into the copy. The original save is not touched."""
+    session.require_open()
+    src = _hood_dir(session)
+    if src is None:
+        raise RpcError("bad_params", "the open package is not a neighborhood package")
+    dest = Path(_need(params, "dir")).expanduser()
+    reason = protection_reason(dest)
+    if reason is not None:
+        raise RpcError("destination_protected", f"refusing to write into {dest}: {reason}")
+    if dest.exists() and any(dest.iterdir()) and not params.get("overwrite"):
+        raise RpcError("exists", f"{dest} is not empty")
+    _progress("hood_save_as", 0, 2, "copying the hood folder")
+    try:
+        shutil.copytree(src, dest, dirs_exist_ok=True)
+    except (OSError, shutil.Error) as exc:
+        raise RpcError("write_failed", f"copy failed: {exc}") from None
+    _progress("hood_save_as", 1, 2, "writing the neighborhood package")
+    target = dest / session.path.name
+    _write(session, target)
+    _progress("hood_save_as", 2, 2)
+    session.path = target
+    session.readonly = False
+    session.readonly_reason = ""
+    session.dirty = False
+    session.cache.pop("characters", None)
+    return _summary(session)
+
+
 def m_bhav_meta(session: Session, params: dict) -> dict:
     """Everything the BHAV editor needs to label things: primitive names,
     the operand layouts s2object has pinned, and the exit sentinels."""
@@ -1088,6 +1355,13 @@ METHODS = {
     "preview_texture": m_preview_texture,
     "export_texture": m_export_texture,
     "preview_mesh": m_preview_mesh,
+    "hood_meta": m_hood_meta,
+    "hood_sims": m_hood_sims,
+    "hood_sim": m_hood_sim,
+    "hood_put_sim": m_hood_put_sim,
+    "hood_put_srel": m_hood_put_srel,
+    "hood_put_tokens": m_hood_put_tokens,
+    "hood_save_as": m_hood_save_as,
     "shutdown": m_shutdown,
 }
 
