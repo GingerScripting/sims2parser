@@ -47,18 +47,23 @@ class Resource:
 
 
 def write_package(path: Path | str, resources: list[Resource], *,
-                  compress: bool = False) -> None:
+                  compress: bool = False,
+                  compress_tgis: "set[tuple[int, int, int, int]] | None" = None) -> None:
     """Serialize resources into a DBPF v1.1 / index 7.2 package file.
 
     With `compress`, each resource is QFS-compressed and kept only if that
     actually made it smaller, and a DIR is emitted listing exactly what ended
-    up compressed. Without it everything is stored plain.
+    up compressed. Without it everything is stored plain. `compress_tgis`
+    picks resources individually instead — the editor uses it to keep a
+    donor's own compression choices, or the user's, rather than deciding
+    for the whole package at once. A resource is compressed if either says so.
 
     Either way an incoming DIR is dropped and rebuilt rather than carried
     over: it describes compression this call decides afresh, so a donor's
     directory would be describing a file that no longer exists.
     """
     resources = [r for r in resources if r.type_id != TYPE_DIR]
+    chosen = compress_tgis or set()
 
     seen: set[tuple[int, int, int, int]] = set()
     for r in resources:
@@ -71,7 +76,7 @@ def write_package(path: Path | str, resources: list[Resource], *,
     directory: list[Resource] = []
     for r in resources:
         blob = r.data
-        if compress and len(r.data) <= s2parser.QFS_MAX_UNCOMPRESSED:
+        if (compress or r.tgi() in chosen) and len(r.data) <= s2parser.QFS_MAX_UNCOMPRESSED:
             packed = s2parser.qfs_compress(r.data)
             # Compression that grew the resource is worse than none: the game
             # reads either, and the DIR is what says which this is.
