@@ -21,6 +21,7 @@ final class PackageSession: ObservableObject, Identifiable {
     @Published private(set) var summary: PackageSummary?
     @Published private(set) var rows: [ResourceRow] = []
     @Published private(set) var meta: Meta?
+    @Published private(set) var bhavMeta: BhavMeta?
     @Published private(set) var detail: ResourceDetail?
     @Published private(set) var detailLoading = false
     @Published private(set) var busy = false
@@ -118,6 +119,30 @@ final class PackageSession: ObservableObject, Identifiable {
     /// Re-fetch the selected resource after an edit, keeping the selection.
     func refreshDetail() {
         loadDetail()
+    }
+
+    /// Fetched once, the first time a BHAV editor opens.
+    func loadBhavMeta() async {
+        guard bhavMeta == nil, let c = client else { return }
+        do {
+            bhavMeta = try await c.call("bhav_meta", as: BhavMeta.self)
+        } catch {
+            report(error)
+        }
+    }
+
+    /// Insert, delete, or move an instruction in a draft. Pure on the
+    /// daemon side: the package is untouched until the draft is applied.
+    func bhavTransform(_ decoded: JSONValue, op: String, index: Int, to: Int? = nil) async -> BhavTransform? {
+        guard let c = client else { return nil }
+        var params: [String: JSONValue] = ["decoded": decoded, "op": .string(op), "index": .int(index)]
+        if let to { params["to"] = .int(to) }
+        do {
+            return try await c.call("bhav_transform", params, as: BhavTransform.self)
+        } catch {
+            report(error)
+            return nil
+        }
     }
 
     // MARK: Edits

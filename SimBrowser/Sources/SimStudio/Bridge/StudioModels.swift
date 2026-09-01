@@ -177,6 +177,60 @@ struct PutResult: Decodable {
     }
 }
 
+/// What the BHAV editor needs to label instructions: primitive names, the
+/// operand layouts the toolkit has pinned, and the exit sentinels.
+struct BhavMeta: Decodable {
+    struct Field: Decodable, Identifiable {
+        let name: String
+        let offset: Int
+        let size: Int
+        let values: [String: String]?
+        var id: String { name }
+    }
+
+    struct Format: Decodable {
+        let instrSize: Int
+        let operandLen: Int
+        let addrWidth: Int
+        enum CodingKeys: String, CodingKey {
+            case instrSize = "instr_size"
+            case operandLen = "operand_len"
+            case addrWidth = "addr_width"
+        }
+    }
+
+    let primitives: [String: String]
+    let layouts: [String: [Field]]
+    let sentinels: [String: Int]
+    let formats: [String: Format]
+
+    func operandWidth(_ format: Int) -> Int? { formats[String(format)]?.operandLen }
+
+    func opcodeName(_ op: Int) -> String {
+        if op < 0x100 { return primitives[String(op)] ?? String(format: "Primitive 0x%04X", op) }
+        if op < 0x1000 { return String(format: "Global BHAV 0x%04X", op) }
+        if op < 0x2000 { return String(format: "Local BHAV 0x%04X", op) }
+        return String(format: "Semiglobal BHAV 0x%04X", op)
+    }
+
+    func destLabel(_ d: Int) -> String {
+        if d == sentinels["true"] { return "→ TRUE" }
+        if d == sentinels["false"] { return "→ FALSE" }
+        if d >= (sentinels["floor"] ?? 0xFFFC) { return "→ ERROR" }
+        return "→ \(d)"
+    }
+
+    var sortedPrimitives: [(code: Int, name: String)] {
+        primitives.compactMap { k, v in Int(k).map { (code: $0, name: v) } }.sorted { $0.code < $1.code }
+    }
+}
+
+/// What `bhav_transform` returns.
+struct BhavTransform: Decodable {
+    let decoded: JSONValue
+    let warnings: [String]
+}
+
 /// Static tables served by the daemon so the app carries no format knowledge.
 struct Meta: Decodable {
     let `protocol`: Int

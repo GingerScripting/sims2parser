@@ -132,10 +132,15 @@ struct EditorHost: View {
                 Divider()
                 HexView(bytes: detail.bytes)
             } else {
-                ScrollView {
-                    editor
-                        .padding(16)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                if draft.typeName == "BhavRes" {
+                    // Owns its own table and scroll areas.
+                    BhavEditor(draft: $draft, session: session)
+                } else {
+                    ScrollView {
+                        editor
+                            .padding(16)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 Divider()
                 HStack {

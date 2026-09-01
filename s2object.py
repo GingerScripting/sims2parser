@@ -70,6 +70,8 @@ import re
 import struct
 from dataclasses import dataclass, field
 
+import s2parser
+
 # ---- SimAntics constants ---------------------------------------------------
 
 RET_TRUE, RET_FALSE, RET_ERROR = 0xFFFD, 0xFFFE, 0xFFFC
@@ -691,10 +693,212 @@ def build_glob(g: Glob) -> bytes:
     return _emit_name64(g.filename, g._name_raw) + bytes((len(raw),)) + raw + g._tail
 
 
+# ---- BHAV round trip ---------------------------------------------------------
+#
+# s2parser.parse_bhav is the decompiler's reader: it keeps what a listing
+# needs and drops the rest — the extra header bytes after the counts, the
+# flags byte, each instruction's tail byte, and anything past a short read.
+# An editor needs the inverse to be exact, so this pair keeps every byte it
+# does not interpret and rebuilds the resource identically (see _selftest,
+# which holds it to that over the game's own objects.package).
+
+# The per-format layouts live in s2parser, which owns the decompiler; the
+# editable model here is the 0x8007 shape for every format, so an edit
+# works the same way on a base-game 0x8002 tree as on a modern one.
+BHAV_LAYOUTS = s2parser.BHAV_LAYOUTS
+BHAV_INSTR_SIZE = BHAV_LAYOUTS[0x8007].instr_size
+BHAV_EXTRA_HEADER = {v: l.extra_header for v, l in BHAV_LAYOUTS.items()}
+BHAV_SENTINEL_FLOOR = s2parser.BHAV_SENTINEL_FLOOR
+
+
+_widen_dest = s2parser.widen_dest
+
+
+def _narrow_dest(d: int, n: int) -> int:
+    if d >= BHAV_SENTINEL_FLOOR:
+        return d & 0xFF
+    if d > 0xFB:
+        raise ValueError(f"instruction {n}: target {d} does not fit a one-byte format "
+                         f"(max 251); convert the tree to format 0x8007 first")
+    return d
+
+
+@dataclass
+class BhavInstr:
+    opcode: int
+    true_dest: int
+    false_dest: int
+    operands: bytes                  # 16 bytes in the model; 8-byte formats pad with zeros
+    tail: bytes = b'\x00'            # the per-instruction byte in 0x8005+, meaning unknown
+
+
+@dataclass
+class BhavRes:
+    """A BHAV as an editable record: header fields, instructions, and the
+    bytes around them that the format does not explain."""
+    name: str
+    format_version: int
+    bhav_type: int
+    argc: int
+    localc: int
+    flags: int                       # signed byte in the header
+    extra_header: bytes              # 4 or 5 bytes after the counts
+    instructions: list[BhavInstr]
+    # The header's instruction count, kept only when the resource is too
+    # short to hold that many — so a truncated donor rebuilds identically.
+    # Any edit to the instruction list resets it.
+    declared_count: int | None = None
+    _tail: bytes = b''
+    _name_raw: bytes | None = field(default=None, repr=False)
+
+
+def parse_bhav_rt(data: bytes) -> BhavRes:
+    """Parse a BHAV of any known format so that build_bhav reproduces it
+    byte for byte. Targets and operands are widened to the 0x8007 model."""
+    if len(data) < 72:
+        raise ValueError(f"BHAV data too short ({len(data)} bytes)")
+    ver, count, bhav_type, argc, localc, flags = struct.unpack_from('<HHBBBb', data, 64)
+    layout = BHAV_LAYOUTS.get(ver)
+    if layout is None:
+        raise ValueError(f"Unsupported BHAV format version 0x{ver:04X}")
+    start = 72 + layout.extra_header
+    if start > len(data):
+        raise ValueError(f"BHAV header truncated ({len(data)} bytes)")
+    addr_fmt = '<HBB' if layout.addr_width == 1 else '<HHH'
+    ops_at = 2 + 2 * layout.addr_width
+    size = layout.instr_size
+    instrs: list[BhavInstr] = []
+    pos = start
+    for _ in range(count):
+        if pos + size > len(data):
+            break
+        opcode, t, f = struct.unpack_from(addr_fmt, data, pos)
+        ops = data[pos + ops_at:pos + ops_at + layout.operand_len]
+        tail = data[pos + ops_at + layout.operand_len:pos + size]
+        if layout.addr_width == 1:
+            t, f = _widen_dest(t), _widen_dest(f)
+        instrs.append(BhavInstr(opcode, t, f, ops + bytes(16 - len(ops)), tail))
+        pos += size
+    declared = count if len(instrs) != count else None
+    return BhavRes(_read_name64(data), ver, bhav_type, argc, localc, flags,
+                   data[72:start], instrs, declared, data[pos:], data[:64])
+
+
+def build_bhav(b: BhavRes) -> bytes:
+    """Serialize a BhavRes. Inverse of parse_bhav_rt."""
+    layout = BHAV_LAYOUTS.get(b.format_version)
+    if layout is None:
+        raise ValueError(f"Unsupported BHAV format version 0x{b.format_version:04X}")
+    if len(b.extra_header) != layout.extra_header:
+        raise ValueError(f"format 0x{b.format_version:04X} needs {layout.extra_header} extra "
+                         f"header bytes, got {len(b.extra_header)}")
+    count = b.declared_count if b.declared_count is not None else len(b.instructions)
+    if count > 0xFFFF:
+        raise ValueError("a BHAV holds at most 65535 instructions")
+    out = bytearray(_emit_name64(b.name, b._name_raw))
+    out += struct.pack('<HHBBBb', b.format_version, count, b.bhav_type & 0xFF,
+                       b.argc & 0xFF, b.localc & 0xFF, b.flags)
+    out += b.extra_header
+    for n, ins in enumerate(b.instructions):
+        if len(ins.operands) != 16:
+            raise ValueError(f"instruction {n}: operands must be 16 bytes, got {len(ins.operands)}")
+        if len(ins.tail) != layout.tail_len:
+            raise ValueError(f"instruction {n}: format 0x{b.format_version:04X} has a "
+                             f"{layout.tail_len}-byte tail, got {len(ins.tail)}")
+        if layout.operand_len < 16 and any(ins.operands[layout.operand_len:]):
+            raise ValueError(f"instruction {n}: format 0x{b.format_version:04X} holds only "
+                             f"{layout.operand_len} operand bytes; convert the tree to 0x8007 "
+                             f"to use the rest")
+        t, f = ins.true_dest & 0xFFFF, ins.false_dest & 0xFFFF
+        if layout.addr_width == 1:
+            out += struct.pack('<HBB', ins.opcode & 0xFFFF, _narrow_dest(t, n), _narrow_dest(f, n))
+        else:
+            out += struct.pack('<HHH', ins.opcode & 0xFFFF, t, f)
+        out += ins.operands[:layout.operand_len] + ins.tail
+    return bytes(out + b._tail)
+
+
+def bhav_convert(b: BhavRes, version: int = 0x8007) -> None:
+    """Rewrite a tree in place to another format version — the way to give a
+    cloned base-game object's 12-byte trees room for 16 operand bytes and
+    more than 251 instructions. The model already holds the wide form, so
+    only the header region and the per-instruction tail need shaping."""
+    layout = BHAV_LAYOUTS.get(version)
+    if layout is None:
+        raise ValueError(f"Unsupported BHAV format version 0x{version:04X}")
+    old = BHAV_LAYOUTS[b.format_version]
+    extra = b.extra_header[:old.extra_header]
+    b.extra_header = (extra + bytes(layout.extra_header))[:layout.extra_header]
+    for ins in b.instructions:
+        ins.tail = (ins.tail + bytes(layout.tail_len))[:layout.tail_len]
+        if old.addr_width == 1 and layout.addr_width == 2:
+            # Old trees spell the error exit 0xFF; new ones 0xFFFC.
+            if ins.true_dest == 0xFFFF:
+                ins.true_dest = 0xFFFC
+            if ins.false_dest == 0xFFFF:
+                ins.false_dest = 0xFFFC
+    b.format_version = version
+
+
+def bhav_to_listing(b: BhavRes):
+    """The decompiler's view of an editable BHAV, for s2parser.render_bhav_tree."""
+    return s2parser.Bhav(b.name, b.format_version, b.bhav_type, b.argc, b.localc,
+                         [s2parser.BhavInstruction(i.opcode, i.true_dest, i.false_dest, i.operands)
+                          for i in b.instructions])
+
+
+# Operand layouts the editor can show by name. Only what has been pinned
+# against donors is here; every other opcode is edited as 16 raw bytes.
+# Each field: name, byte offset in the 16-byte operand block, width, and an
+# optional value -> label table. The Expression operator and owner tables
+# beyond the values confirmed above (0x02/0x03/0x05; owners 0x00/0x01/0x07/
+# 0x08/0x09/0x19) follow SimPE's expression editor.
+_EXPR_OPERATORS = {
+    0x00: '>', 0x01: '<', 0x02: '==', 0x03: '+=', 0x04: '-=', 0x05: ':=',
+    0x06: '*=', 0x07: '/=', 0x0E: '!=', 0x0F: '>=', 0x10: '<=',
+}
+_DATA_OWNERS = {
+    OWNER_MY_ATTR: 'my attribute', OWNER_STACKOBJ_ATTR: 'stack object attribute',
+    OWNER_LITERAL: 'literal', OWNER_TEMP: 'temp', OWNER_PARAM: 'param', OWNER_LOCAL: 'local',
+}
+_INV_OPERATIONS = {
+    INV_COUNT: 'count -> value var',
+}
+BHAV_OPERAND_LAYOUTS = {
+    OP_EXPRESSION: [
+        {'name': 'flag', 'offset': 0, 'size': 1},
+        {'name': 'lhs', 'offset': 1, 'size': 2},
+        {'name': 'rhs', 'offset': 3, 'size': 2},
+        {'name': 'operator', 'offset': 6, 'size': 1, 'values': _EXPR_OPERATORS},
+        {'name': 'lhs_owner', 'offset': 7, 'size': 1, 'values': _DATA_OWNERS},
+        {'name': 'rhs_owner', 'offset': 8, 'size': 1, 'values': _DATA_OWNERS},
+    ],
+    OP_DIALOG: [
+        {'name': 'string_index', 'offset': 14, 'size': 2},
+    ],
+    OP_INVENTORY: [
+        {'name': 'category', 'offset': 0, 'size': 1},
+        {'name': 'inventory', 'offset': 1, 'size': 1, 'values': {INV_GLOBAL: 'global (gossip store)'}},
+        {'name': 'owner_scope', 'offset': 2, 'size': 1},
+        {'name': 'owner_id', 'offset': 3, 'size': 2},
+        {'name': 'operation', 'offset': 5, 'size': 1, 'values': _INV_OPERATIONS},
+        {'name': 'guid', 'offset': 6, 'size': 4},
+        {'name': 'sel_scope', 'offset': 11, 'size': 1},
+        {'name': 'sel_id', 'offset': 12, 'size': 1},
+        {'name': 'val_scope', 'offset': 14, 'size': 1},
+        {'name': 'val_id', 'offset': 15, 'size': 1},
+    ],
+    # GUID literal at +1, the slot s2clone patches (see GUID_OPERANDS there).
+    0x001F: [{'name': 'guid', 'offset': 1, 'size': 4}],
+    0x0020: [{'name': 'guid', 'offset': 1, 'size': 4}],
+}
+
+
 # ---- dispatch ----------------------------------------------------------------
 
 # type id -> (parser, builder). STR#/TTAs/CTSS share one string-table format.
 PARSERS = {
+    TYPE_BHAV: (parse_bhav_rt, build_bhav),
     TYPE_BCON: (parse_bcon, build_bcon),
     TYPE_GLOB: (parse_glob, build_glob),
     TYPE_STR: (parse_str, build_str),

@@ -173,3 +173,86 @@ def copy(res: Resource) -> Resource:
         c._plain = res._plain
         return c
     return Resource(res.type_id, res.group_id, res.instance_id, bytes(res.data), res.instance_hi)
+
+
+# ---- BHAV instruction editing -------------------------------------------------
+#
+# Branch targets are instruction indices, so inserting, deleting, or moving
+# an instruction has to renumber every target that pointed past the change.
+# Values from 0xFFFC up are exit sentinels (error / true / false) and are
+# never touched. Each function edits the BhavRes in place and returns the
+# warnings a user should see — a deleted instruction that something still
+# jumped to, say.
+
+SENTINEL_FLOOR = 0xFFFC
+RET_ERROR_SENTINEL = 0xFFFC
+
+
+def _is_sentinel(dest: int) -> bool:
+    return dest >= SENTINEL_FLOOR
+
+
+def _retarget(bhav, mapping) -> "list[str]":
+    """Apply `mapping(old_index) -> new_index | None` to every branch target.
+    None means the target no longer exists; it becomes the error sentinel."""
+    warnings = []
+    for n, ins in enumerate(bhav.instructions):
+        for attr in ("true_dest", "false_dest"):
+            d = getattr(ins, attr)
+            if _is_sentinel(d):
+                continue
+            new = mapping(d)
+            if new is None:
+                setattr(ins, attr, RET_ERROR_SENTINEL)
+                warnings.append(f"[{n}] {attr.split('_')[0]} branch pointed at the deleted "
+                                f"instruction; now → ERROR")
+            else:
+                setattr(ins, attr, new)
+    return warnings
+
+
+def bhav_insert(bhav, index: int, instr=None) -> "list[str]":
+    """Insert an instruction at `index` (0..len). Targets at or past `index`
+    shift up by one, so the existing flow is unchanged and the new
+    instruction is reached only by whatever is rewired to it."""
+    from s2object import BHAV_LAYOUTS, BhavInstr
+    count = len(bhav.instructions)
+    if not 0 <= index <= count:
+        raise ValueError(f"index {index} out of range 0..{count}")
+    warnings = _retarget(bhav, lambda d: d + 1 if d >= index else d)
+    if instr is None:
+        # A Sleep for zero ticks that falls through: harmless until edited.
+        # The tail matches the tree's format — older ones have none.
+        tail = bytes(BHAV_LAYOUTS[bhav.format_version].tail_len)
+        instr = BhavInstr(0x0000, min(index + 1, 0xFFFB), RET_ERROR_SENTINEL, bytes(16), tail)
+        if index == count:
+            instr.true_dest = 0xFFFD
+    bhav.instructions.insert(index, instr)
+    bhav.declared_count = None
+    return warnings
+
+
+def bhav_delete(bhav, index: int) -> "list[str]":
+    count = len(bhav.instructions)
+    if not 0 <= index < count:
+        raise ValueError(f"index {index} out of range 0..{count - 1}")
+    del bhav.instructions[index]
+    bhav.declared_count = None
+    return _retarget(bhav, lambda d: None if d == index else (d - 1 if d > index else d))
+
+
+def bhav_move(bhav, index: int, to: int) -> "list[str]":
+    """Move the instruction at `index` so it sits at `to`, renumbering every
+    target so all branches still reach the same instructions."""
+    count = len(bhav.instructions)
+    if not (0 <= index < count and 0 <= to < count):
+        raise ValueError(f"index out of range 0..{count - 1}")
+    if index == to:
+        return []
+    order = list(range(count))
+    order.insert(to, order.pop(index))          # order[new] = old
+    new_of = {old: new for new, old in enumerate(order)}
+    ins = bhav.instructions
+    bhav.instructions = [ins[old] for old in order]
+    bhav.declared_count = None
+    return _retarget(bhav, lambda d: new_of.get(d))
