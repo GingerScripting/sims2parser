@@ -3,6 +3,7 @@ __pycache__/
 sample-packages/
 SimBrowser/.build/
 Sim Browser.app/
+Sim Studio.app/
 .DS_Store
 SimBrowser/.swiftpm/
 quarantine/

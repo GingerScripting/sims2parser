@@ -1,4 +1,5 @@
 import SwiftUI
+import SimKit
 
 struct SimDetailView: View {
     let sim: Sim
@@ -557,35 +558,5 @@ struct SimDetailView: View {
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-/// Minimal flow layout for wrapping name chips.
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? 600
-        var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            if x > 0 && x + size.width > maxWidth { x = 0; y += rowH + spacing; rowH = 0 }
-            x += size.width + spacing
-            rowH = max(rowH, size.height)
-        }
-        return CGSize(width: maxWidth, height: y + rowH)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX, y = bounds.minY, rowH: CGFloat = 0
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            if x > bounds.minX && x + size.width > bounds.maxX {
-                x = bounds.minX; y += rowH + spacing; rowH = 0
-            }
-            sub.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
-            x += size.width + spacing
-            rowH = max(rowH, size.height)
-        }
     }
 }
