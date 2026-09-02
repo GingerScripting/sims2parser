@@ -897,8 +897,93 @@ BHAV_OPERAND_LAYOUTS = {
 # ---- dispatch ----------------------------------------------------------------
 
 # type id -> (parser, builder). STR#/TTAs/CTSS share one string-table format.
+# ---- TPRP: behaviour function labels ------------------------------------------
+#
+# The names a BHAV's parameters and locals were given in the editor that
+# wrote it. Layout, checked against 5,067 resources across every version
+# 0x43–0x4E in the game's lot packages and sample-packages/:
+#
+#   64  filename            "PRPT"  u32 version  u32 0  u32 nparams  u32 nlocals
+#   nparams + nlocals strings, each a 7-bit varint length then Latin-1 bytes
+#   u32 0   nparams bytes (one flag per parameter, 0 or 1)   u32 5   u32 0
+#
+# The trailing words are constant in every sample but their meaning is not
+# known, so they are kept as bytes and written back as read.
+
+TYPE_TPRP = 0x54505250
+
+
+@dataclass
+class Tprp:
+    name: str
+    version: int
+    params: list[str]
+    locals: list[str]
+    param_flags: bytes          # one byte per parameter
+    unknown: int = 0            # u32 after the header, always 0 in samples
+    unknown2: int = 0           # u32 after the labels, always 0 in samples
+    tail: bytes = b'\x05\x00\x00\x00\x00\x00\x00\x00'
+    _name_raw: bytes | None = field(default=None, repr=False)
+
+
+def _read_varint(data: bytes, pos: int) -> tuple[int, int]:
+    n = shift = 0
+    while True:
+        c = data[pos]
+        pos += 1
+        n |= (c & 0x7F) << shift
+        shift += 7
+        if not c & 0x80:
+            return n, pos
+
+
+def _emit_varint(n: int) -> bytes:
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        out.append(b | (0x80 if n else 0))
+        if not n:
+            return bytes(out)
+
+
+def parse_tprp(data: bytes) -> Tprp:
+    if len(data) < 84 or data[64:68] != b'PRPT':
+        raise ValueError('not a TPRP (no PRPT tag at 0x40)')
+    version, unknown, np, nl = struct.unpack_from('<4I', data, 68)
+    pos = 84
+    labels = []
+    for _ in range(np + nl):
+        n, pos = _read_varint(data, pos)
+        if pos + n > len(data):
+            raise ValueError('TPRP label runs past the end')
+        labels.append(data[pos:pos + n].decode('latin-1'))
+        pos += n
+    if pos + 4 + np > len(data):
+        raise ValueError('TPRP truncated after its labels')
+    unknown2, = struct.unpack_from('<I', data, pos)
+    pos += 4
+    flags = data[pos:pos + np]
+    pos += np
+    return Tprp(_read_name64(data), version, labels[:np], labels[np:], flags,
+                unknown, unknown2, data[pos:], data[:64])
+
+
+def build_tprp(t: Tprp) -> bytes:
+    if len(t.param_flags) != len(t.params):
+        raise ValueError(f'{len(t.params)} parameters but {len(t.param_flags)} parameter flags')
+    out = bytearray(_emit_name64(t.name, t._name_raw))
+    out += b'PRPT' + struct.pack('<4I', t.version, t.unknown, len(t.params), len(t.locals))
+    for label in t.params + t.locals:
+        raw = label.encode('latin-1', 'replace')
+        out += _emit_varint(len(raw)) + raw
+    out += struct.pack('<I', t.unknown2) + bytes(t.param_flags) + t.tail
+    return bytes(out)
+
+
 PARSERS = {
     TYPE_BHAV: (parse_bhav_rt, build_bhav),
+    TYPE_TPRP: (parse_tprp, build_tprp),
     TYPE_BCON: (parse_bcon, build_bcon),
     TYPE_GLOB: (parse_glob, build_glob),
     TYPE_STR: (parse_str, build_str),

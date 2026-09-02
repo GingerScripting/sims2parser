@@ -198,6 +198,7 @@ struct EditorHost: View {
         case "Glob": GlobEditor(draft: $draft)
         case "Objf": ObjfEditor(draft: $draft, meta: session.meta)
         case "Ttab": TtabEditor(draft: $draft, meta: session.meta)
+        case "Tprp": TprpEditor(draft: $draft)
         default: GenericEditor(draft: $draft)
         }
     }
