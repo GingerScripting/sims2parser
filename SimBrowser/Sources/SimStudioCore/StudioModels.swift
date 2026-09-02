@@ -600,6 +600,10 @@ public struct SimToken: Decodable, Identifiable, Equatable {
     public var values: [Int]
     public var id: String { "\(guid)-\(raw)-\(values.map(String.init).joined(separator: ","))" }
 
+    public init(guid: UInt32, name: String, raw: String, values: [Int]) {
+        self.guid = guid; self.name = name; self.raw = raw; self.values = values
+    }
+
     public var json: JSONValue {
         .object(["guid": .number(Double(guid)), "raw": .string(raw), "values": .array(values.map { .int($0) })])
     }
