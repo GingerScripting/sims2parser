@@ -397,6 +397,7 @@ def _index_row(session: Session, r: Resource) -> dict:
         "decodable": r.type_id in s2object.PARSERS,
         "bhav": r.type_id == s2object.TYPE_BHAV,
         "flags": _row_flags(session, r),
+        "name": s2package.resource_name(r),
     }
 
 
@@ -498,11 +499,36 @@ def m_index(session: Session, params: dict) -> dict:
             "type_names": {str(k): v for k, v in names.items()}}
 
 
+def m_names(session: Session, params: dict) -> dict:
+    """Each resource's own name — the 64-byte filename most object resources
+    open with, the cSGResource name of a scenegraph resource — as compact
+    `[type, group, instance, instance_hi, name]` rows, only for resources
+    that have one. Separate from `index` because it touches every payload
+    (0.8 s over objects.package's 52,000 entries against 0.3 s to open),
+    so the window can show the index first and fill names in after; and
+    because undo and compression changes reload the index without needing
+    names read again. `tgis` limits it to those resources.
+    """
+    session.require_open()
+    if "tgis" in params:
+        wanted = [s2package.parse_tgi(t) for t in params["tgis"]]
+        resources = [r for r in (s2package.get(session.resources, t) for t in wanted) if r is not None]
+    else:
+        resources = session.resources
+    rows = []
+    for r in resources:
+        name = s2package.resource_name(r)
+        if name:
+            rows.append([r.type_id, r.group_id, r.instance_id, r.instance_hi, name])
+    return {"names": rows}
+
+
 def m_meta(session: Session, params: dict) -> dict:
     """Static tables the UI needs, served so Swift carries no format knowledge."""
     return {
         "protocol": PROTOCOL_VERSION,
         "type_names": {str(k): v for k, v in s2parser.TYPE_NAMES.items()},
+        "type_descriptions": {str(k): v for k, v in s2parser.TYPE_DESCRIPTIONS.items()},
         "decodable_types": sorted(s2object.PARSERS),
         "bhav_type": s2object.TYPE_BHAV,
         "objd_fields": s2object.OBJD_FIELDS,
@@ -567,14 +593,16 @@ def m_put_resource(session: Session, params: dict) -> dict:
     r = session.require(tgi)
     data = _new_data(r, params)
     if data == r.data:
-        return {"size": len(data), "changed": False, **_summary(session)}
+        return {"size": len(data), "changed": False, "name": s2package.resource_name(r),
+                **_summary(session)}
     n = s2package.find(session.resources, tgi)
     old = s2package.copy(r)
     r.data = data
     comp = tgi in session.compressed
     session.push(Step(params.get("label") or f"Edit {r.type_name}",
                       [Change(tgi, old, s2package.copy(r), n, comp, comp)]))
-    return {"size": len(data), "changed": True, **_summary(session)}
+    return {"size": len(data), "changed": True, "name": s2package.resource_name(r),
+            **_summary(session)}
 
 
 def m_add_resource(session: Session, params: dict) -> dict:
@@ -1364,6 +1392,7 @@ METHODS = {
     "open": m_open,
     "status": m_status,
     "index": m_index,
+    "names": m_names,
     "meta": m_meta,
     "get_resource": m_get_resource,
     "render_bhav": m_render_bhav,

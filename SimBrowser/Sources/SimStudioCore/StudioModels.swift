@@ -65,9 +65,12 @@ public struct ResourceRow: Decodable, Identifiable, Hashable {
     public let decodable: Bool
     public let bhav: Bool
     public let flags: Int
+    /// The resource's own name (a BHAV's or OBJD's 64-byte filename, an
+    /// RCOL's cSGResource name); nil when the type has none or it is blank.
+    public let name: String?
 
     public enum CodingKeys: String, CodingKey {
-        case type, group, instance, size, compressed, decodable, bhav, flags
+        case type, group, instance, size, compressed, decodable, bhav, flags, name
         case typeName = "type_name"
         case instanceHi = "instance_hi"
     }
@@ -84,14 +87,23 @@ public struct ResourceRow: Decodable, Identifiable, Hashable {
         decodable = try c.decode(Bool.self, forKey: .decodable)
         bhav = try c.decode(Bool.self, forKey: .bhav)
         flags = try c.decodeIfPresent(Int.self, forKey: .flags) ?? 0
+        name = try c.decodeIfPresent(String.self, forKey: .name)
     }
 
     public init(type: UInt32, typeName: String, group: UInt32, instance: UInt32, instanceHi: UInt32,
-         size: Int, compressed: Bool, decodable: Bool, bhav: Bool, flags: Int) {
+         size: Int, compressed: Bool, decodable: Bool, bhav: Bool, flags: Int, name: String? = nil) {
         self.type = type; self.typeName = typeName; self.group = group; self.instance = instance
         self.instanceHi = instanceHi; self.size = size; self.compressed = compressed
-        self.decodable = decodable; self.bhav = bhav; self.flags = flags
+        self.decodable = decodable; self.bhav = bhav; self.flags = flags; self.name = name
     }
+
+    /// The same row carrying a different name, for merging the `names` reply.
+    public func named(_ name: String?) -> ResourceRow {
+        ResourceRow(type: type, typeName: typeName, group: group, instance: instance, instanceHi: instanceHi,
+                    size: size, compressed: compressed, decodable: decodable, bhav: bhav, flags: flags, name: name)
+    }
+
+    public var nameSort: String { name ?? "" }
 
     public var tgi: TGI { TGI(type: type, group: group, instance: instance, instanceHi: instanceHi) }
     public var id: TGI { tgi }
@@ -199,12 +211,14 @@ public struct RowResult: Decodable {
 public struct PutResult: Decodable {
     public let size: Int
     public let changed: Bool
+    public let name: String?
     public let summary: PackageSummary
-    public enum CodingKeys: String, CodingKey { case size, changed }
+    public enum CodingKeys: String, CodingKey { case size, changed, name }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         size = try c.decode(Int.self, forKey: .size)
         changed = try c.decode(Bool.self, forKey: .changed)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
         summary = try PackageSummary(from: decoder)
     }
 }
@@ -267,6 +281,7 @@ public struct BhavTransform: Decodable {
 public struct Meta: Decodable {
     public let `protocol`: Int
     public let typeNames: [String: String]
+    public let typeDescriptions: [String: String]
     public let decodableTypes: [UInt32]
     public let bhavType: UInt32
     public let objdFields: [String: Int]
@@ -288,6 +303,7 @@ public struct Meta: Decodable {
     public enum CodingKeys: String, CodingKey {
         case `protocol`
         case typeNames = "type_names"
+        case typeDescriptions = "type_descriptions"
         case decodableTypes = "decodable_types"
         case bhavType = "bhav_type"
         case objdFields = "objd_fields"
@@ -300,6 +316,11 @@ public struct Meta: Decodable {
 
     public func typeName(_ type: UInt32) -> String {
         typeNames[String(type)] ?? hex8(type)
+    }
+
+    /// What the type is for, in plain words, when the daemon knows.
+    public func typeDescription(_ type: UInt32) -> String? {
+        typeDescriptions[String(type)]
     }
 
     /// Known types, sorted by name, for the New Resource picker.

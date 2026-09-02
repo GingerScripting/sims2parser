@@ -205,6 +205,32 @@ with the whole file-format side living in Python:
   Hood** writes a complete copy of the neighborhood folder elsewhere with the
   edits applied.
 
+### Finding your way around
+
+A package is a bag of *resources*, each identified by a type, a group, and an
+instance number — that is all the file format stores, so that is what the
+table shows. Sim Studio adds two things to make the bag readable:
+
+- **Names.** Most resources name themselves inside their own bytes (a BHAV's
+  or OBJD's 64-byte filename, a mesh or texture's scenegraph name), and the
+  Name column shows that. Search matches names too, so typing `Insimenator`
+  or `interaction - Kiss` finds the rows without knowing any ids.
+- **Type descriptions.** The type tree on the left says what each four-letter
+  code is for — STR# is a text list, OBJD is the object definition with the
+  GUID and price, TTAB is the pie menu, BHAV is SimAntics code.
+
+The typical route through an object package: **OBJD** for its identity and
+catalog settings, **STR#**/**CTSS** for its text, **TTAB** for which pie-menu
+entries it offers, **BHAV** for what those entries do. Group `0xFFFFFFFF`
+means "local to this package"; `0x7FD46CD0` is the game's global scope.
+
+Select a row and the detail pane shows the richest view it can: **Decoded**
+is a form when the toolkit knows the format, **Tree** is the decompiled
+listing for a BHAV, **Preview** renders textures and meshes, and **Hex** is
+always there. Edit in the form, press **Apply** (⌘↩) to push the change into
+the package in memory, and **Save** (⌘S) to write the file. Undo covers every
+applied change until you save.
+
 Undo, redo, Save, and Save As all go through a per-window Python process
 (`s2studio.py`); the Swift side never holds a package's bytes. Files under the
 game's `Neighborhoods` folder or inside the game install open read-only, and

@@ -64,6 +64,60 @@ TYPE_NAMES = {
     0x49596978: "TXMT",  # material definition
     0x4C697E5A: "cGZPropertySet",   # binary property list, not an image
     0xCCA8E925: "MMAT",  # material override
+    0x44475250: "DGRP",  # draw group
+    0x53505232: "SPR2",  # sprites
+    0x54505250: "TPRP",  # behaviour function labels (param/local names)
+    0x5452434E: "TRCN",  # behaviour constant labels
+}
+
+# What each type is for, in the words SimPE's type list uses. Served to the
+# editor so a newcomer sees "Text list" beside "STR#" rather than four letters.
+TYPE_DESCRIPTIONS = {
+    0x42434F4E: "Behaviour constants (tuning numbers)",
+    0x42484156: "Behaviour function (SimAntics code)",
+    0x424D505F: "Bitmap image",
+    0x43545353: "Catalog description (name and description text)",
+    0x46414D49: "Family information",
+    0x46434E53: "Function constants (global tuning)",
+    0x46574156: "Sound reference",
+    0x474C4F42: "Semi-global group reference",
+    0x484F5553: "House / lot data",
+    0x4E524546: "Name reference (object filename)",
+    0x4E474248: "Neighborhood memories and tokens",
+    0x4F424A44: "Object definition (GUID, price, catalog flags)",
+    0x4F424A66: "Object functions (which BHAV runs for each event)",
+    0x4F574E52: "Lot owner",
+    0x50414C54: "Palette",
+    0x53494D49: "Sim information (on a lot)",
+    0x534C4F54: "Slot definitions (where sims and objects attach)",
+    0x534F424A: "Object instance (on a lot)",
+    0x53545223: "Text list (strings)",
+    0x54544142: "Pie menu functions (interactions)",
+    0x54544173: "Pie menu strings",
+    0xAACE2EFB: "Sim description",
+    0xAC4F8687: "Mesh geometry",
+    0x7BA3838C: "Geometry node",
+    0xFC6EB1F7: "Shape (which mesh gets which material)",
+    0xE519C933: "Resource node (scenegraph root)",
+    0xFB00791E: "Animation",
+    0xCC364C2A: "Sim-to-sim relationship",
+    0x0BF999E7: "Lot description",
+    0x8C870743: "Family ties",
+    0xCD95548E: "Sim wants and fears",
+    0xAC8A7A2E: "Neighborhood id",
+    0xEBFEE33F: "Person property set (XML)",
+    0xE86B1EEF: "Compression directory",
+    0xED534136: "Large image mip level",
+    0xFC4B284B: "Texture image",
+    0x1C4A276C: "Texture image",
+    0x49596978: "Material definition",
+    0xCCA8E925: "Material override (recolour)",
+    0x0C560F39: "Property set",
+    0x4C697E5A: "Property set",
+    0x44475250: "Draw group (which sprites to show)",
+    0x53505232: "Sprites",
+    0x54505250: "Behaviour function labels (parameter and local names)",
+    0x5452434E: "Behaviour constant labels",
 }
 
 
@@ -420,12 +474,18 @@ def qfs_compress(data: bytes, *, chain_depth: int = 48) -> bytes:
 # QFS / RefPack decompression (Maxis variant used in DBPF packages)
 # ---------------------------------------------------------------------------
 
-def qfs_decompress(data: bytes) -> bytes:
-    """Decompress QFS/RefPack data. Returns data unchanged if not compressed."""
+def qfs_decompress(data: bytes, limit: "int | None" = None) -> bytes:
+    """Decompress QFS/RefPack data. Returns data unchanged if not compressed.
+
+    `limit` stops after that many output bytes: reading a resource's name
+    from its first 64 bytes should not inflate a megabyte of texture.
+    """
     if len(data) < 9 or data[4:6] != b'\x10\xfb':
-        return data
+        return data if limit is None else data[:limit]
 
     uncomp_size = int.from_bytes(data[6:9], 'big')
+    if limit is not None:
+        uncomp_size = min(uncomp_size, limit)
     out = bytearray(uncomp_size)
     src = 9
     dst = 0
@@ -461,9 +521,11 @@ def qfs_decompress(data: bytes) -> bytes:
             num_copy  = 0
             offset    = 0
 
-        # Copy literal bytes
-        out[dst:dst + num_plain] = data[src:src + num_plain]
-        dst += num_plain
+        # Copy literal bytes (clamped: a slice assignment past the end
+        # would grow the buffer instead of stopping at the limit)
+        take = min(num_plain, uncomp_size - dst)
+        out[dst:dst + take] = data[src:src + take]
+        dst += take
         src += num_plain
 
         # Copy from already-decoded output (may overlap → byte-by-byte)

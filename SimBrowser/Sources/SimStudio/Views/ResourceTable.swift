@@ -22,6 +22,12 @@ struct ResourceTable: View {
                 Text(r.typeName)
             }
             .width(min: 56, ideal: 72)
+            TableColumn("Name", value: \.nameSort) { r in
+                Text(r.name ?? "")
+                    .lineLimit(1)
+                    .help(r.name ?? "This type of resource carries no name")
+            }
+            .width(min: 120, ideal: 240)
             TableColumn("Group", value: \.group) { r in
                 Text(hex8(r.group)).font(.system(.body, design: .monospaced))
             }

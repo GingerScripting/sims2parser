@@ -35,9 +35,18 @@ struct DetailPane: View {
             } else if session.detailLoading {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Text("Select a resource")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 10) {
+                    Image(systemName: "shippingbox").font(.largeTitle).foregroundStyle(.tertiary)
+                    Text("Select a resource").font(.headline)
+                    Text("Pick a type on the left, then a row in the middle. Decoded opens an editor "
+                         + "when the toolkit has one; Hex always works. Edits stay in memory until you "
+                         + "Save, or Save As for a read-only file.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 380)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
@@ -45,8 +54,15 @@ struct DetailPane: View {
     private func header(_ d: ResourceDetail) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text(d.row.typeName).font(.title3).fontWeight(.semibold)
+                Text(d.row.name ?? d.row.typeName).font(.title3).fontWeight(.semibold)
+                    .lineLimit(1).textSelection(.enabled)
+                if d.row.name != nil {
+                    Text(d.row.typeName).font(.callout).foregroundStyle(.secondary)
+                }
                 Text(hex8(d.row.type)).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                if let what = session.typeDescription(d.row.type) {
+                    Text(what).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                }
                 Spacer()
                 Picker("", selection: $tab) {
                     ForEach(tabs(for: d)) { t in Text(t.rawValue).tag(t) }

@@ -113,7 +113,8 @@ struct PackageWindow: View {
                 SimsPane(session: session)
             } else {
                 HStack(spacing: 0) {
-                    TypeTree(rows: session.rows, selection: $filter)
+                    TypeTree(rows: session.rows, selection: $filter,
+                             describe: { session.typeDescription($0) })
                         .frame(width: 240)
                     Divider()
                     ResourceTable(session: session, rows: filteredRows,
@@ -176,7 +177,7 @@ struct PackageWindow: View {
                 }
             }
         }
-        .searchable(text: $search, placement: .toolbar, prompt: "Filter by group, instance, or type")
+        .searchable(text: $search, placement: .toolbar, prompt: "Filter by name, type, or hex id")
     }
 
     /// The file's folder, with the home directory abbreviated — so a scratch
@@ -201,8 +202,8 @@ struct PackageWindow: View {
         .padding(.vertical, 4)
     }
 
-    /// The tree filter, then the search text against the row's type name and
-    /// the hex forms of its ids. Sorting is the table's business.
+    /// The tree filter, then the search text against the row's name, type
+    /// name, and the hex forms of its ids. Sorting is the table's business.
     private var filteredRows: [ResourceRow] {
         let base: [ResourceRow]
         switch filter {
@@ -214,7 +215,8 @@ struct PackageWindow: View {
         guard !q.isEmpty else { return base }
         let needle = q.hasPrefix("0x") ? String(q.dropFirst(2)) : q
         return base.filter { r in
-            r.typeName.lowercased().contains(q)
+            (r.name?.lowercased().contains(q) ?? false)
+                || r.typeName.lowercased().contains(q)
                 || String(format: "%08x", r.group).contains(needle)
                 || String(format: "%08x", r.instance).contains(needle)
         }
