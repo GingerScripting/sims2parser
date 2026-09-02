@@ -172,18 +172,3 @@ struct JournalEditorView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
-
-/// Generic isolation wrapper: hosts content in its own NSHostingView so
-/// scrollable views inside it can't trigger the macOS 26 root-layout
-/// extension bug (see DetailHost / GeometryProbe history).
-struct IsolatedPane<Content: View>: NSViewRepresentable {
-    let content: Content
-    init(@ViewBuilder _ content: () -> Content) { self.content = content() }
-
-    func makeNSView(context: Context) -> NSHostingView<Content> {
-        NSHostingView(rootView: content)
-    }
-    func updateNSView(_ nsView: NSHostingView<Content>, context: Context) {
-        nsView.rootView = content
-    }
-}

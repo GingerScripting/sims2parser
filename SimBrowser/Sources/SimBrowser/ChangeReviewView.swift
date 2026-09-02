@@ -1,4 +1,5 @@
 import SwiftUI
+import SimKit
 
 /// The detected-changes review sheet: everything the save diff found, grouped
 /// by household the way a rotational season is actually played, with a tick box

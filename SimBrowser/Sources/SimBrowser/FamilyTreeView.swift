@@ -1,4 +1,5 @@
 import SwiftUI
+import SimKit
 
 extension Sim {
     /// Shared life-stage palette (list rows and tree boxes stay in step).

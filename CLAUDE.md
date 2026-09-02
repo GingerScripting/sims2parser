@@ -12,23 +12,42 @@ scratch directory or `sample-packages/` — never back into a save.
 ## Two languages, one direction
 
 ```
-Sims 2 saves ──▶ Python toolkit ──▶ sims.json ──▶ SwiftUI app
-(DBPF/QFS)        (all format work)   (cache)      (SimBrowser/)
+Sims 2 saves ──▶ Python toolkit ──▶ sims.json ──▶ Sim Browser (SwiftUI)
+(DBPF/QFS)        (all format work)   (cache)
+
+.package ◀──▶ s2studio.py daemon ◀── JSON-RPC ──▶ Sim Studio (SwiftUI)
+              (bytes, decoding, undo, save policy)  (views only)
 ```
 
-All binary format knowledge lives in Python. The Swift app only ever reads the
-extracted JSON — it cannot open a `.package` and so cannot corrupt a save. Keep
-it that way: a new save-data feature means a Python parser plus a JSON field,
-then Swift consumes it. Never parse game bytes in Swift.
+All binary format knowledge lives in Python. The Swift apps only ever see
+JSON — Sim Browser reads the extracted `sims.json`; Sim Studio talks to a
+`s2studio.py --serve` process over stdin/stdout and never holds a package's
+bytes (it gets hex for the hex view and decoded dataclasses as JSON for the
+editors, and sends the same shapes back). Neither app can open a `.package`
+itself and so neither can corrupt a save. Keep it that way: a new save-data
+feature means a Python parser plus a JSON field, then Swift consumes it; a new
+editable resource type means a parse/build pair in `s2object.py` registered
+in `PARSERS`, and the daemon serves it with no Swift change beyond a form.
+Never parse game bytes in Swift.
+
+Sim Studio's read-only rule is enforced in the daemon, not the UI:
+`s2studio.protection_reason()` refuses `save` on anything under a
+`Neighborhoods` folder or inside the game's own install, and refuses
+`save_as` into either. Save As to a copy elsewhere is allowed.
 
 ## Commands
 
 ```sh
-./SimBrowser/make_app.sh              # build "Sim Browser.app" in the repo root (universal)
+./SimBrowser/make_app.sh              # build "Sim Browser.app" and "Sim Studio.app" in the repo root (universal)
 ARCHS=native ./SimBrowser/make_app.sh # this machine only — much quicker while iterating
-cd SimBrowser && swift run            # run the app from source, no bundle
-cd SimBrowser && swift build          # compile check
+APPS=SimStudio ARCHS=native ./SimBrowser/make_app.sh   # just one app
+cd SimBrowser && swift run SimBrowser # run an app from source, no bundle (or SimStudio)
+cd SimBrowser && swift build          # compile check for SimKit + both apps
 ```
+
+Sim Studio can be driven headless when its window can't be seen:
+`SIMSTUDIO_TRACE=1` logs every RPC to stderr and `SIMSTUDIO_OPEN=<file>`
+opens that package at launch.
 
 ```sh
 python3 s2neighborhood.py --hood N002 --out /tmp/sims.json   # extract one hood
@@ -44,6 +63,7 @@ There is no test framework. Verification is two things:
 python3 s2object.py                       # round-trips every parser against donors, byte-for-byte
 python3 s2writer.py <donor.package>       # read → write → re-read → compare
 python3 s2parser.py --qfs-selftest sample-packages/   # recompress every QFS payload and verify
+python3 tests/rpc_smoke.py                # drives the Sim Studio daemon end to end + the read-only policy
 ```
 
 …plus **empirical checks against canonical premades**, which is the real test
@@ -75,11 +95,13 @@ Sanity-check with the system interpreter explicitly:
 
 ## Adding a Python module the app needs
 
-`SimBrowser/make_app.sh` copies a **hardcoded list** of files into
-`Contents/Resources` — currently `s2neighborhood.py s2parser.py s2ngbh.py
-s2luastate.py s2ltw.py careers.json wants.json`. If `s2neighborhood.py` gains a
-new import, add it to that list or the app launches fine and then fails at
-extraction time with a bare `ImportError`, while `swift run` keeps working.
+`SimBrowser/make_app.sh` copies a **hardcoded list** of files into each
+bundle's `Contents/Resources` — `BROWSER_FILES` for Sim Browser (the
+extractor's import closure) and `STUDIO_FILES` for Sim Studio (the daemon's,
+which is nearly the whole toolkit). If `s2neighborhood.py` or `s2studio.py`
+gains a new import, add it to the right list or the app launches fine and
+then fails at extraction time with a bare `ImportError`, while `swift run`
+keeps working.
 `careers.json` and `wants.json` are read relative to the module that loads them,
 so they have to sit alongside it in the bundle.
 
@@ -99,6 +121,21 @@ the non-sandboxed and EA-Games layouts. Extracted JSON and app state cache to
 gitignored on purpose — trait tables and icon art transcribed from the printed
 guides. Don't commit them.
 
+## Sim Studio layout
+
+`SimBrowser/Package.swift` builds three targets: `SimKit` (shared:
+`IsolatedPane`, `FlowLayout`, `SectionCard`, `PythonLocator`), `SimBrowser`,
+and `SimStudio`. Sim Studio is `Sources/SimStudio/`: `Bridge/` (the RPC
+client, `JSONValue`, the Codable mirrors of the daemon's replies),
+`Session/PackageSession.swift` (one open package, `@MainActor`), and
+`Views/` (three-pane window, type tree, resource `Table`, detail pane with
+Decoded/Tree/Hex tabs, one editor per decodable type under `Editors/`). It is
+deliberately **not** a document-based app: `FileDocument` would hand Swift
+the bytes. Each package is a `WindowGroup(for: URL.self)` window owning one
+daemon process. Calling `openWindow` inside the first `onAppear` or the
+launch-time open-URL event races window creation and produces two windows
+for one URL, so every open is deferred by a beat.
+
 ## Module ownership
 
 | File | Owns |
@@ -112,7 +149,9 @@ guides. Don't commit them.
 | `s2clone.py` | The SimPE "Object Workshop" step — clone an object to a new identity, rewriting every reference so it coexists with its donor |
 | `s2texture.py` | TXTR/LIFO → PNG. Owns the **generic RCOL reader**, which `s2mesh.py` reuses. |
 | `s2mesh.py` | GMDC (`cGeometryDataContainer`) → Wavefront OBJ. Partial. |
-| `s2writer.py` | DBPF writer (uncompressed or QFS-compressed with a DIR) + `read_all_resources()` |
+| `s2writer.py` | DBPF writer (uncompressed or QFS-compressed with a DIR, whole-package or per-TGI via `compress_tgis`) + `read_all_resources()`. Writes a still-packed `LazyResource` as-is. |
+| `s2studio.py` | The Sim Studio daemon: JSON-RPC over stdio, one session per open package, undo stack, the read-only policy (`protection_reason`), decoded↔JSON conversion (`to_json`/`from_json`, with `$type`, `$hex`, `$props`). |
+| `s2package.py` | Pure in-memory package operations the daemon and its undo stack share, and `LazyResource` — a compressed resource that inflates on first access so objects.package opens in a quarter second. |
 | `s2savediff.py` | Save snapshot/diff — the discovery tool for unknown formats |
 | `s2doctor.py` | Reads the game's own error logs; scans Downloads for conflicts |
 | `make_wants.py` | Regenerates `wants.json` (want GUID → definition) from the game's own `Wants.package` |

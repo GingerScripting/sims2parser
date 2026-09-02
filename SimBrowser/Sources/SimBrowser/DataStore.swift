@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import SimKit
 
 @MainActor
 final class DataStore: ObservableObject {
@@ -12,37 +13,16 @@ final class DataStore: ObservableObject {
         didSet { persistChanges() }
     }
 
-    /// Where the extractor script lives, in falling priority: an explicit
-    /// override, the copy bundled inside the app, then a source checkout.
-    ///
-    /// The bundled copy is what makes the app relocatable — `make_app.sh` puts
-    /// the extractor and everything it imports in `Contents/Resources`, so a
-    /// packaged build has no dependency on where the repo was cloned. The
-    /// checkout path is the fallback for `swift run` during development, where
-    /// there is no bundle to read from. Override with
+    /// Where the extractor script lives — see `PythonLocator` for the search
+    /// order. Override with
     /// `defaults write org.macadmins.rebecca.simbrowser extractorPath …`
     var extractorPath: String {
-        if let custom = UserDefaults.standard.string(forKey: "extractorPath") { return custom }
-        if let bundled = Bundle.main.resourceURL?
-            .appendingPathComponent("s2neighborhood.py").path,
-           FileManager.default.isReadableFile(atPath: bundled) {
-            return bundled
-        }
-        return NSString(string: "~/Documents/sims_2_project/s2neighborhood.py").expandingTildeInPath
+        PythonLocator.script("s2neighborhood.py", defaultsKey: "extractorPath")
     }
 
-    /// Which interpreter runs the extractor. Not `/usr/bin/env python3`: an app
-    /// launched from Finder inherits only /usr/bin:/bin:/usr/sbin:/sbin, so env
-    /// finds Apple's python3 (3.9) whatever the user has installed, and the
-    /// same app run from a terminal would pick a different one. Prefer a real
-    /// install, fall back to the system copy. Override with
+    /// Which interpreter runs the extractor. Override with
     /// `defaults write org.macadmins.rebecca.simbrowser pythonPath …`
-    var pythonPath: String {
-        if let custom = UserDefaults.standard.string(forKey: "pythonPath") { return custom }
-        let candidates = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
-            ?? "/usr/bin/python3"
-    }
+    var pythonPath: String { PythonLocator.interpreter() }
 
     var dataURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

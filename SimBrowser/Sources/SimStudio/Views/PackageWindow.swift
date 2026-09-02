@@ -1,0 +1,166 @@
+import SwiftUI
+import AppKit
+import SimKit
+
+/// Owns the session for one window. Split from `PackageWindow` so the
+/// `@StateObject` is created exactly once per URL.
+struct PackageRoot: View {
+    @StateObject private var session: PackageSession
+    @Environment(\.openWindow) private var openWindow
+
+    init(url: URL) {
+        _session = StateObject(wrappedValue: PackageSession(url: url))
+        trace("PackageRoot init \(url.lastPathComponent)")
+    }
+
+    var body: some View {
+        // No `.onDisappear { close }`: the root view appears, disappears, and
+        // reappears while the window is first shown, which would restart the
+        // daemon. The session shuts it down when the window's state object
+        // is released instead.
+        PackageWindow(session: session)
+            .task { await session.start() }
+            .onOpenURL { url in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { openWindow(value: url) }
+            }
+    }
+}
+
+/// Which slice of the index the table shows, driven by the type tree.
+enum TreeFilter: Hashable {
+    case all
+    case type(UInt32)
+    case typeGroup(UInt32, UInt32)
+}
+
+struct PackageWindow: View {
+    @ObservedObject var session: PackageSession
+    @State private var filter: TreeFilter = .all
+    @State private var search = ""
+    @State private var showNewResource = false
+
+    var body: some View {
+        Group {
+            switch session.phase {
+            case .opening:
+                ProgressView("Opening \(session.title)…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .failed(let message):
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle").font(.largeTitle)
+                    Text(message).multilineTextAlignment(.center).textSelection(.enabled)
+                }
+                .padding(40)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .ready:
+                content
+            }
+        }
+        .frame(minWidth: 1180, minHeight: 640)
+        .navigationTitle(session.title + (session.isDirty ? " — Edited" : ""))
+        .navigationDocument(session.currentURL)
+        .focusedSceneValue(\.session, session)
+        .alert("Sim Studio", isPresented: Binding(
+            get: { session.errorMessage != nil },
+            set: { if !$0 { session.errorMessage = nil } })) {
+            Button("OK") { session.errorMessage = nil }
+        } message: {
+            Text(session.errorMessage ?? "")
+        }
+        .sheet(isPresented: $showNewResource) {
+            NewResourceSheet(session: session)
+        }
+    }
+
+    private var content: some View {
+        VStack(spacing: 0) {
+            if session.isReadonly { readonlyBanner }
+            // Deliberately an HStack, not NavigationSplitView — see Sim
+            // Browser's ContentView for the macOS 26 measurement behind that.
+            HStack(spacing: 0) {
+                TypeTree(rows: session.rows, selection: $filter)
+                    .frame(width: 240)
+                Divider()
+                ResourceTable(session: session, rows: filteredRows, onNewResource: { showNewResource = true })
+                    .frame(minWidth: 460)
+                Divider()
+                DetailPane(session: session)
+                    .frame(minWidth: 440, maxWidth: .infinity)
+            }
+            Divider()
+            statusBar
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .navigation) {
+                Button { Task { await session.undo() } } label: { Label(session.undoLabel, systemImage: "arrow.uturn.backward") }
+                    .disabled(!session.canUndo)
+                    .help(session.undoLabel)
+                Button { Task { await session.redo() } } label: { Label(session.redoLabel, systemImage: "arrow.uturn.forward") }
+                    .disabled(!session.canRedo)
+                    .help(session.redoLabel)
+            }
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button { showNewResource = true } label: { Label("New Resource", systemImage: "plus") }
+                    .help("Add an empty resource")
+                Menu {
+                    Button("Compress All") { Task { await session.setAllCompressed(true) } }
+                    Button("Store All Uncompressed") { Task { await session.setAllCompressed(false) } }
+                } label: {
+                    Label("Compression", systemImage: "archivebox")
+                }
+                .help("Applies at the next save")
+                Button { Task { await session.save() } } label: { Label("Save", systemImage: "square.and.arrow.down") }
+                    .disabled(session.isReadonly || !session.isDirty)
+                    .help(session.isReadonly ? "Read-only — use Save As" : "Save")
+                Button { SavePanels.saveAs(session) } label: { Label("Save As…", systemImage: "square.and.arrow.down.on.square") }
+                    .help("Write a copy elsewhere")
+            }
+        }
+        .searchable(text: $search, placement: .toolbar, prompt: "Filter by group, instance, or type")
+    }
+
+    private var readonlyBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock.fill")
+            Text("Read-only: \(session.summary?.readonlyReason ?? ""). Edits stay in memory; use Save As to write a copy elsewhere.")
+                .font(.callout)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.yellow.opacity(0.18))
+    }
+
+    private var statusBar: some View {
+        HStack(spacing: 12) {
+            Text(session.summary?.version ?? "")
+            Spacer()
+            Text("\(filteredRows.count) of \(session.rows.count) resources")
+            Text("\(session.summary?.compressedCount ?? 0) compressed")
+            if session.busy { ProgressView().controlSize(.small) }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+
+    /// The tree filter, then the search text against the row's type name and
+    /// the hex forms of its ids. Sorting is the table's business.
+    private var filteredRows: [ResourceRow] {
+        let base: [ResourceRow]
+        switch filter {
+        case .all: base = session.rows
+        case .type(let t): base = session.rows.filter { $0.type == t }
+        case .typeGroup(let t, let g): base = session.rows.filter { $0.type == t && $0.group == g }
+        }
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return base }
+        let needle = q.hasPrefix("0x") ? String(q.dropFirst(2)) : q
+        return base.filter { r in
+            r.typeName.lowercased().contains(q)
+                || String(format: "%08x", r.group).contains(needle)
+                || String(format: "%08x", r.instance).contains(needle)
+        }
+    }
+}
