@@ -47,18 +47,28 @@ class Resource:
 
 
 def write_package(path: Path | str, resources: list[Resource], *,
-                  compress: bool = False) -> None:
+                  compress: bool = False,
+                  compress_tgis: "set[tuple[int, int, int, int]] | None" = None) -> None:
     """Serialize resources into a DBPF v1.1 / index 7.2 package file.
 
     With `compress`, each resource is QFS-compressed and kept only if that
     actually made it smaller, and a DIR is emitted listing exactly what ended
-    up compressed. Without it everything is stored plain.
+    up compressed. Without it everything is stored plain. `compress_tgis`
+    picks resources individually instead — the editor uses it to keep a
+    donor's own compression choices, or the user's, rather than deciding
+    for the whole package at once. A resource is compressed if either says so.
+
+    A resource that still carries its own QFS stream in a `packed` attribute
+    (see s2package.LazyResource) is written from that stream rather than
+    recompressed, so saving a 50 MB donor with one edit costs one
+    compression, not fifty thousand.
 
     Either way an incoming DIR is dropped and rebuilt rather than carried
     over: it describes compression this call decides afresh, so a donor's
     directory would be describing a file that no longer exists.
     """
     resources = [r for r in resources if r.type_id != TYPE_DIR]
+    chosen = compress_tgis or set()
 
     seen: set[tuple[int, int, int, int]] = set()
     for r in resources:
@@ -66,25 +76,34 @@ def write_package(path: Path | str, resources: list[Resource], *,
             raise ValueError(f"Duplicate TGI: {r.type_name} g={r.group_id:08x} i={r.instance_id:08x}")
         seen.add(r.tgi())
 
-    # (on-disk bytes, uncompressed length) per resource, in package order.
+    # On-disk bytes per resource, in package order, and for each one that
+    # ends up compressed, its uncompressed length for the DIR.
     payloads: list[bytes] = []
-    directory: list[Resource] = []
+    directory: list[tuple[Resource, int]] = []
     for r in resources:
+        want = compress or r.tgi() in chosen
+        packed = getattr(r, "packed", None) if want else None
+        if packed is not None:
+            plain_len = qfs_uncompressed_size(packed)
+            if len(packed) < plain_len:
+                payloads.append(packed)
+                directory.append((r, plain_len))
+                continue
         blob = r.data
-        if compress and len(r.data) <= s2parser.QFS_MAX_UNCOMPRESSED:
-            packed = s2parser.qfs_compress(r.data)
+        if want and len(blob) <= s2parser.QFS_MAX_UNCOMPRESSED:
+            packed = s2parser.qfs_compress(blob)
             # Compression that grew the resource is worse than none: the game
             # reads either, and the DIR is what says which this is.
             if len(packed) < len(blob):
+                directory.append((r, len(blob)))
                 blob = packed
-                directory.append(r)
         payloads.append(blob)
 
     if directory:
         entries = b''.join(
             struct.pack("<IIIII", r.type_id, r.group_id, r.instance_id,
-                        r.instance_hi, len(r.data))
-            for r in directory)
+                        r.instance_hi, plain_len)
+            for r, plain_len in directory)
         resources = resources + [Resource(*DIR_TGI[:3], entries, DIR_TGI[3])]
         payloads.append(entries)
 
@@ -115,6 +134,13 @@ def write_package(path: Path | str, resources: list[Resource], *,
         f.write(header)
         f.write(body)
         f.write(index)
+
+
+def qfs_uncompressed_size(packed: bytes) -> int:
+    """The inflated length a QFS stream declares in its 9-byte header."""
+    if len(packed) < s2parser.QFS_HEADER_SIZE or packed[4:6] != s2parser.QFS_MAGIC:
+        raise ValueError("not a QFS stream")
+    return int.from_bytes(packed[6:9], 'big')
 
 
 def read_all_resources(path: Path | str) -> list[Resource]:
