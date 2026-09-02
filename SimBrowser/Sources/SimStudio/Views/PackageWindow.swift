@@ -32,6 +32,7 @@ struct PackageRoot: View {
 
 /// Which slice of the index the table shows, driven by the type tree.
 enum TreeFilter: Hashable {
+    case overview       // all rows, and the detail pane back on the overview
     case all
     case type(UInt32)
     case typeGroup(UInt32, UInt32)
@@ -69,8 +70,10 @@ struct PackageWindow: View {
             }
         }
         .frame(minWidth: 1180, minHeight: 640)
-        .navigationTitle(session.title + (session.isDirty ? " — Edited" : ""))
+        .navigationTitle(session.title)
+        .navigationSubtitle(folderLabel)
         .navigationDocument(session.currentURL)
+        .background(WindowEditedMarker(isEdited: session.isDirty))
         .focusedSceneValue(\.session, session)
         .alert("Sim Studio", isPresented: Binding(
             get: { session.errorMessage != nil },
@@ -111,7 +114,8 @@ struct PackageWindow: View {
                 SimsPane(session: session)
             } else {
                 HStack(spacing: 0) {
-                    TypeTree(rows: session.rows, selection: $filter)
+                    TypeTree(rows: session.rows, selection: $filter,
+                             describe: { session.typeDescription($0) })
                         .frame(width: 240)
                     Divider()
                     ResourceTable(session: session, rows: filteredRows,
@@ -119,7 +123,10 @@ struct PackageWindow: View {
                                   onSplit: { tool = .split($0) })
                         .frame(minWidth: 460)
                     Divider()
-                    DetailPane(session: session)
+                    DetailPane(session: session, reveal: { tgi in
+                        filter = .all
+                        session.selectedTGIs = [tgi]
+                    })
                         .frame(minWidth: 440, maxWidth: .infinity)
                 }
             }
@@ -127,7 +134,9 @@ struct PackageWindow: View {
             statusBar
         }
         .toolbar {
-            ToolbarItemGroup(placement: .navigation) {
+            // Nothing in the navigation placement: the title belongs at the
+            // leading edge, not squeezed after a run of buttons.
+            ToolbarItemGroup(placement: .primaryAction) {
                 if session.isHood {
                     Picker("Mode", selection: $mode) {
                         ForEach(Mode.allCases) { m in Text(m.rawValue).tag(m) }
@@ -141,8 +150,6 @@ struct PackageWindow: View {
                 Button { Task { await session.redo() } } label: { Label(session.redoLabel, systemImage: "arrow.uturn.forward") }
                     .disabled(!session.canRedo)
                     .help(session.redoLabel)
-            }
-            ToolbarItemGroup(placement: .primaryAction) {
                 Menu {
                     Button("Clone Object…") { tool = .clone }
                     Button("Merge Package Into This…") { tool = .merge }
@@ -174,7 +181,18 @@ struct PackageWindow: View {
                 }
             }
         }
-        .searchable(text: $search, placement: .toolbar, prompt: "Filter by group, instance, or type")
+        .searchable(text: $search, placement: .toolbar, prompt: "Filter by name, type, or hex id")
+        .onChange(of: filter) { f in
+            if f == .overview { session.selectedTGIs = [] }
+        }
+    }
+
+    /// The file's folder, with the home directory abbreviated — so a scratch
+    /// copy and the real file in Downloads are told apart at a glance.
+    private var folderLabel: String {
+        let folder = session.currentURL.deletingLastPathComponent().path
+        let home = NSHomeDirectory()
+        return folder.hasPrefix(home) ? "~" + folder.dropFirst(home.count) : folder
     }
 
     private var statusBar: some View {
@@ -191,12 +209,12 @@ struct PackageWindow: View {
         .padding(.vertical, 4)
     }
 
-    /// The tree filter, then the search text against the row's type name and
-    /// the hex forms of its ids. Sorting is the table's business.
+    /// The tree filter, then the search text against the row's name, type
+    /// name, and the hex forms of its ids. Sorting is the table's business.
     private var filteredRows: [ResourceRow] {
         let base: [ResourceRow]
         switch filter {
-        case .all: base = session.rows
+        case .all, .overview: base = session.rows
         case .type(let t): base = session.rows.filter { $0.type == t }
         case .typeGroup(let t, let g): base = session.rows.filter { $0.type == t && $0.group == g }
         }
@@ -204,7 +222,8 @@ struct PackageWindow: View {
         guard !q.isEmpty else { return base }
         let needle = q.hasPrefix("0x") ? String(q.dropFirst(2)) : q
         return base.filter { r in
-            r.typeName.lowercased().contains(q)
+            (r.name?.lowercased().contains(q) ?? false)
+                || r.typeName.lowercased().contains(q)
                 || String(format: "%08x", r.group).contains(needle)
                 || String(format: "%08x", r.instance).contains(needle)
         }

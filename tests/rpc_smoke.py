@@ -128,6 +128,22 @@ def main() -> int:
             tgi = {"type": row["type"], "group": row["group"],
                    "instance": row["instance"], "instance_hi": row["instance_hi"]}
             assert index["type_names"][str(row["type"])] == "STR#"
+            assert meta["type_descriptions"][str(row["type"])].startswith("Text list")
+
+            ov = c.call("overview")
+            assert ov["kind"] == "object" and ov["objects"], ov
+            assert ov["objects"][0]["name"] and ov["headline"], ov
+            assert isinstance(ov["objects"][0]["interactions"], list)
+
+            # Names: every BHAV names itself; asking for one TGI gives just it.
+            names = c.call("names")["names"]
+            named = {(t, g, i, hi): n for t, g, i, hi, n in names}
+            bhavs = [r for r in rows if r["type"] == s2object.TYPE_BHAV]
+            for b in bhavs[:5]:
+                assert (b["type"], b["group"], b["instance"], b["instance_hi"]) in named, b
+            one = c.call("names", tgis=[tgi])["names"]
+            assert all(r[:4] == [tgi["type"], tgi["group"], tgi["instance"], tgi["instance_hi"]]
+                       for r in one), one
 
             got = c.call("get_resource", tgi=tgi)
             assert got["row"]["instance"] == row["instance"] and got["row"]["decodable"]

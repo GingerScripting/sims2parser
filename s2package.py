@@ -81,6 +81,59 @@ def size(res: Resource) -> int:
     return res.size if isinstance(res, LazyResource) else len(res.data)
 
 
+def head(res: Resource, n: int) -> bytes:
+    """The first `n` uncompressed bytes, stopping the decompressor there
+    rather than inflating a whole texture to read its name."""
+    if isinstance(res, LazyResource) and res.packed is not None:
+        return s2parser.qfs_decompress(res.packed, limit=n)
+    return res.data[:n]
+
+
+# Types whose payload opens with a 64-byte NUL-padded filename. Checked
+# against every resource in the game's objects.package: BHAV, BCON and OBJD
+# are named without exception; STR#, GLOB, TTAB and CTSS mostly; OBJf and
+# TTAs carry the field but usually leave it blank.
+NAME64_TYPES = frozenset({
+    0x42484156, 0x53545223, 0x42434F4E, 0x4F424A44, 0x4F424A66, 0x474C4F42,
+    0x54544142, 0x54544173, 0x43545353, 0x424D505F, 0x44475250, 0x53505232,
+    0x54505250,
+})
+# RCOL documents name themselves in an embedded cSGResource block — right at
+# the front for GMDC/SHPE/TXTR/TXMT, ~730 bytes in for a CRES.
+SGRES_TYPES = frozenset({
+    0xAC4F8687, 0x7BA3838C, 0xFC6EB1F7, 0xE519C933, 0x49596978, 0xFC4B284B,
+    0x1C4A276C, 0xED534136, 0xFB00791E,
+})
+_SGRES_TAG = b"cSGResource"
+
+
+def _printable(b: bytes) -> "str | None":
+    if b and all(0x20 <= c < 0x7F for c in b):
+        return b.decode("ascii")
+    return None
+
+
+def resource_name(res: Resource) -> "str | None":
+    """The name a resource gives itself, or None when its type has none or
+    the field is blank. This is what SimPE's Name column shows."""
+    t = res.type_id
+    if t in NAME64_TYPES:
+        return _printable(head(res, 64).split(b"\0", 1)[0])
+    if t == 0x4E524546:                        # NREF: the payload is the name
+        return _printable(res.data.rstrip(b"\0"))
+    if t in SGRES_TYPES:
+        p = head(res, 2048)
+        i = p.find(_SGRES_TAG)
+        if i < 0:
+            return None
+        pos = i + len(_SGRES_TAG) + 8          # block type id + version
+        if pos >= len(p) or p[pos] & 0x80:
+            return None
+        n = p[pos]
+        return _printable(p[pos + 1:pos + 1 + n])
+    return None
+
+
 def parse_tgi(value) -> "tuple[int, int, int, int]":
     """Accept a TGI as a 3- or 4-element list, or a dict with named keys.
 

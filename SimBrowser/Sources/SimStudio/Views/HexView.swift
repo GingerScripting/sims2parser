@@ -9,12 +9,15 @@ struct HexView: View {
     private var rowCount: Int { (bytes.count + 15) / 16 }
 
     var body: some View {
-        ScrollView {
+        // Both axes: a 16-byte row is ~80 monospaced columns, wider than
+        // the pane at its minimum, and a wrapped dump is unreadable.
+        ScrollView([.horizontal, .vertical]) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(0..<rowCount, id: \.self) { row in
                     Text(line(row))
-                        .font(.system(.body, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .font(.system(.callout, design: .monospaced))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
             }
             .padding(16)

@@ -28,6 +28,10 @@ public final class PackageSession: ObservableObject, Identifiable {
     @Published public private(set) var busy = false
     @Published public var errorMessage: String?
     @Published public private(set) var progress: TaskProgress?
+    /// The plain-words account shown when nothing is selected. Loaded on
+    /// demand; `editCount` ticks after every change so the pane re-reads it.
+    @Published public private(set) var overview: Overview?
+    @Published public private(set) var editCount = 0
 
     /// What the table has selected. The detail pane follows a single
     /// selection; the context menu and split act on the whole set.
@@ -71,6 +75,13 @@ public final class PackageSession: ObservableObject, Identifiable {
     public var title: String { currentURL.lastPathComponent }
 
     public func typeName(_ type: UInt32) -> String { meta?.typeName(type) ?? hex8(type) }
+    public func typeDescription(_ type: UInt32) -> String? { meta?.typeDescription(type) }
+
+    /// Resource names by TGI, read by the daemon after the index so the
+    /// window shows rows at once and names a beat later. Kept apart from
+    /// `rows` because index reloads (undo, compression) would otherwise
+    /// re-read every payload.
+    private var names: [TGI: String] = [:]
 
     // MARK: Lifecycle
 
@@ -92,6 +103,7 @@ public final class PackageSession: ObservableObject, Identifiable {
             rows = try ResourceRow.rows(fromIndex: await c.callRaw("index"))
             phase = .ready
             await loadHoodMeta()
+            await loadNames()
         } catch {
             phase = .failed("Could not open \(url.lastPathComponent) with \(python) \(script): "
                             + describe(error))
@@ -109,9 +121,48 @@ public final class PackageSession: ObservableObject, Identifiable {
         guard let c = client else { return }
         do {
             rows = try ResourceRow.rows(fromIndex: await c.callRaw("index"))
+            applyNames()
         } catch {
             report(error)
         }
+    }
+
+    /// Fetch names for `tgis`, or for every resource when nil, and merge
+    /// them into the rows. A resource the daemon no longer names loses its
+    /// entry, so a rename or an edit that blanks the field shows as blank.
+    public func loadNames(_ tgis: [TGI]? = nil) async {
+        guard let c = client else { return }
+        do {
+            var params: [String: JSONValue] = [:]
+            if let tgis { params["tgis"] = .array(tgis.map(\.json)) }
+            let raw = try await c.callRaw("names", params)
+            guard let obj = raw as? [String: Any], let list = obj["names"] as? [[Any]] else {
+                throw RPCFailure.transport("unexpected names shape")
+            }
+            if let tgis { for t in tgis { names.removeValue(forKey: t) } } else { names.removeAll() }
+            for r in list where r.count >= 5 {
+                guard let t = (r[0] as? NSNumber)?.uint32Value, let g = (r[1] as? NSNumber)?.uint32Value,
+                      let i = (r[2] as? NSNumber)?.uint32Value, let hi = (r[3] as? NSNumber)?.uint32Value,
+                      let name = r[4] as? String else { continue }
+                names[TGI(type: t, group: g, instance: i, instanceHi: hi)] = name
+            }
+            applyNames()
+        } catch {
+            trace("names: \(describe(error))")      // cosmetic: the rows stay unnamed
+        }
+    }
+
+    public func loadOverview() async {
+        guard let c = client else { return }
+        do {
+            overview = try await c.call("overview", as: Overview.self)
+        } catch {
+            report(error)
+        }
+    }
+
+    private func applyNames() {
+        rows = rows.map { $0.name == names[$0.tgi] ? $0 : $0.named(names[$0.tgi]) }
     }
 
     private func loadDetail() {
@@ -174,7 +225,7 @@ public final class PackageSession: ObservableObject, Identifiable {
         await mutate {
             let r = try await $0.call("put_resource", ["tgi": tgi.json, "decoded": value], as: PutResult.self)
             self.summary = r.summary
-            self.replaceRow(tgi: tgi, size: r.size)
+            self.replaceRow(tgi: tgi, size: r.size, name: r.name)
         }
     }
 
@@ -183,7 +234,7 @@ public final class PackageSession: ObservableObject, Identifiable {
         await mutate {
             let r = try await $0.call("put_resource", ["tgi": tgi.json, "hex": .string(bytes.hexString)], as: PutResult.self)
             self.summary = r.summary
-            self.replaceRow(tgi: tgi, size: r.size)
+            self.replaceRow(tgi: tgi, size: r.size, name: r.name)
         }
     }
 
@@ -193,6 +244,7 @@ public final class PackageSession: ObservableObject, Identifiable {
                                                        "compressed": .bool(compressed)], as: RowResult.self)
             self.summary = r.summary
             self.rows.append(r.row)
+            self.names[r.row.tgi] = r.row.name
             self.selectedTGIs = [r.row.tgi]
         }
     }
@@ -203,6 +255,7 @@ public final class PackageSession: ObservableObject, Identifiable {
             self.summary = try await $0.call("delete_resource", ["tgis": .array(tgis.map(\.json))], as: PackageSummary.self)
             let gone = Set(tgis)
             self.rows.removeAll { gone.contains($0.tgi) }
+            for t in gone { self.names.removeValue(forKey: t) }
             self.selectedTGIs.subtract(gone)
         }
     }
@@ -212,6 +265,8 @@ public final class PackageSession: ObservableObject, Identifiable {
             let r = try await $0.call("rename_resource", ["tgi": tgi.json, "new_tgi": newTGI.json], as: RowResult.self)
             self.summary = r.summary
             if let i = self.rows.firstIndex(where: { $0.tgi == tgi }) { self.rows[i] = r.row }
+            self.names.removeValue(forKey: tgi)
+            self.names[r.row.tgi] = r.row.name
             if self.selectedTGIs.contains(tgi) {
                 self.selectedTGIs.remove(tgi)
                 self.selectedTGIs.insert(r.row.tgi)
@@ -248,6 +303,7 @@ public final class PackageSession: ObservableObject, Identifiable {
             let r = try await $0.call(method, as: HistoryResult.self)
             self.summary = r.summary
             await self.reloadIndex()
+            await self.loadNames(r.tgis)         // a restored or re-edited resource may be named anew
             // Undoing an add or a rename removes the selected TGI from the
             // index; a selection that no longer exists would fetch nothing.
             let live = Set(self.rows.map(\.tgi))
@@ -284,7 +340,7 @@ public final class PackageSession: ObservableObject, Identifiable {
         await mutate {
             let r = try await $0.call("import_resource", ["tgi": tgi.json, "path": .string(src.path)], as: PutResult.self)
             self.summary = r.summary
-            self.replaceRow(tgi: tgi, size: r.size)
+            self.replaceRow(tgi: tgi, size: r.size, name: r.name)
         }
     }
 
@@ -316,7 +372,9 @@ public final class PackageSession: ObservableObject, Identifiable {
         do {
             let r = try await c.call("clone", p, as: CloneResult.self)
             summary = r.summary
+            editCount += 1
             await reloadIndex()
+            await loadNames()
             refreshDetail()
             return r
         } catch {
@@ -345,7 +403,9 @@ public final class PackageSession: ObservableObject, Identifiable {
                                                "on_conflict": .string(replace ? "replace" : "skip")],
                                      as: MergeResult.self)
             summary = r.summary
+            editCount += 1
             await reloadIndex()
+            await loadNames()
             return r
         } catch {
             report(error)
@@ -365,6 +425,7 @@ public final class PackageSession: ObservableObject, Identifiable {
                 let gone = Set(tgis)
                 rows.removeAll { gone.contains($0.tgi) }
                 selectedTGIs.subtract(gone)
+                editCount += 1
             }
             return r
         } catch {
@@ -481,6 +542,7 @@ public final class PackageSession: ObservableObject, Identifiable {
         defer { busy = false }
         do {
             try await body(c)
+            editCount += 1
             refreshDetail()
             if isHood { await loadHoodMeta() }      // the store may have changed
             return true
@@ -490,12 +552,14 @@ public final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    private func replaceRow(tgi: TGI, size: Int) {
+    private func replaceRow(tgi: TGI, size: Int, name: String?) {
         guard let i = rows.firstIndex(where: { $0.tgi == tgi }) else { return }
         let old = rows[i]
+        names[tgi] = name
         rows[i] = ResourceRow(type: old.type, typeName: old.typeName, group: old.group,
                               instance: old.instance, instanceHi: old.instanceHi, size: size,
-                              compressed: old.compressed, decodable: old.decodable, bhav: old.bhav, flags: old.flags)
+                              compressed: old.compressed, decodable: old.decodable, bhav: old.bhav,
+                              flags: old.flags, name: name)
     }
 
     private func report(_ error: Error) {

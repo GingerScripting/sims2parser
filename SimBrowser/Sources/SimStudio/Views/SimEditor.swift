@@ -57,6 +57,7 @@ struct SimsPane: View {
                         SimEditor(session: session, nid: nid)
                     }
                     .id(nid)
+                    .clipped()
                 } else {
                     Text("Select a sim").foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -259,7 +260,7 @@ struct RelationshipsView: View {
                 TableColumn("Lifetime") { r in Text("\(r.fields["lifetime"] ?? 0)").monospacedDigit() }.width(64)
                 TableColumn("Flags") { r in Text(flagLabels(r.fields["flags"] ?? 0)).font(.caption) }
             }
-            .frame(minWidth: 380)
+            .frame(minWidth: 300)
             Divider()
             ScrollView {
                 if let t = selected, let r = rels.first(where: { $0.target == t }) {
@@ -269,7 +270,7 @@ struct RelationshipsView: View {
                     Text("Select a relationship").foregroundStyle(.secondary).padding()
                 }
             }
-            .frame(minWidth: 280)
+            .frame(minWidth: 240)
         }
     }
 
@@ -378,7 +379,7 @@ struct TokensView: View {
                     tokenSection("first", title: "First list", items: first)
                     tokenSection("second", title: "Second list", items: second)
                 }
-                .frame(minWidth: 360)
+                .frame(minWidth: 300)
                 Divider()
                 ScrollView {
                     if let sel = selection, let (list, i) = parse(sel) {
@@ -387,7 +388,7 @@ struct TokensView: View {
                         Text("Select a token").foregroundStyle(.secondary).padding()
                     }
                 }
-                .frame(minWidth: 280)
+                .frame(minWidth: 240)
             }
             Divider()
             HStack {

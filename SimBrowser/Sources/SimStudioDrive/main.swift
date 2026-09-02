@@ -53,6 +53,15 @@ func drive(_ scratch: URL) async {
     let session = await open(scratch)
     log("opened \(session.title): \(session.rows.count) rows, readonly=\(session.isReadonly)")
     guard !session.isReadonly else { fail("the file is read-only; drive a scratch copy") }
+    // Names arrive after the index; every BHAV has one.
+    let named = session.rows.filter { $0.name != nil }.count
+    guard session.rows.contains(where: { $0.bhav && $0.name != nil }) else { fail("no BHAV row carries a name") }
+    log("\(named) of \(session.rows.count) rows named, e.g. '\(session.rows.first { $0.bhav }?.name ?? "")'")
+    await session.loadOverview()
+    guard let ov = session.overview, ov.kind == "object", let obj = ov.objects.first else {
+        fail("overview: \(session.overview.map { $0.kind } ?? session.errorMessage ?? "nil")")
+    }
+    log("overview: \(ov.headline) (\(obj.interactions.count) pie-menu entries)")
 
     // 1. A STR# row that decodes with at least one entry.
     var picked: (ResourceRow, JSONValue)?

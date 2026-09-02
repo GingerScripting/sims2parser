@@ -6,6 +6,8 @@ import SimStudioCore
 struct TypeTree: View {
     let rows: [ResourceRow]
     @Binding var selection: TreeFilter
+    /// Plain-words description of a type id, from the daemon's meta tables.
+    var describe: (UInt32) -> String? = { _ in nil }
 
     struct GroupNode: Identifiable {
         let id: UInt32
@@ -23,6 +25,8 @@ struct TypeTree: View {
 
     var body: some View {
         List(selection: $selection) {
+            Label("Overview", systemImage: "info.circle")
+                .tag(TreeFilter.overview)
             HStack {
                 Label("All Resources", systemImage: "shippingbox")
                 Spacer()
@@ -36,14 +40,23 @@ struct TypeTree: View {
                         ForEach(node.groups) { g in
                             HStack {
                                 Text(hex8(g.id)).font(.system(.body, design: .monospaced))
+                                if let label = groupLabel(g.id) {
+                                    Text(label).font(.caption).foregroundStyle(.secondary)
+                                }
                                 Spacer()
                                 countBadge(g.count)
                             }
                             .tag(TreeFilter.typeGroup(node.id, g.id))
                         }
                     } label: {
-                        HStack {
-                            Text(node.name)
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(node.name)
+                                if let d = describe(node.id) {
+                                    Text(d).font(.caption).foregroundStyle(.secondary)
+                                        .lineLimit(1).help(d)
+                                }
+                            }
                             Spacer()
                             countBadge(node.count)
                         }
@@ -56,6 +69,15 @@ struct TypeTree: View {
         .onAppear { rebuild() }
         .onChange(of: rows.count) { _ in rebuild() }
         .onChange(of: rows) { _ in rebuild() }
+    }
+
+    /// The two group ids every package uses; the rest are per-object.
+    private func groupLabel(_ g: UInt32) -> String? {
+        switch g {
+        case 0xFFFFFFFF: return "this package"
+        case 0x7FD46CD0: return "global"
+        default: return nil
+        }
     }
 
     private func countBadge(_ n: Int) -> some View {
