@@ -41,6 +41,7 @@ ROOT_CANDIDATES = [
 SDSC = 0xAACE2EFB
 HOUSEHOLD_SENTINEL = 32767   # last group of the household section
 EMPTY_GROUP_SIZE = 16        # gid, marker, 0 tokens, 0 tokens
+CHUNK = 32768                # serialisation buffer granularity        # gid, marker, 0 tokens, 0 tokens
 TERMINATOR = struct.pack("<I", 1)
 
 
@@ -57,6 +58,7 @@ class Report:
     last_end: int = 0
     trailing: bytes = b""
     sdsc_count: int = 0
+    ngbh_size: int = 0
     missing_nids: "list[int]" = field(default_factory=list)
     error: str = ""
 
@@ -132,6 +134,7 @@ def inspect(target: Path) -> "Report | None":
             return rep
 
     d = rep.data
+    rep.ngbh_size = len(d)
     rep.groups = walk_groups(d)
     if not rep.groups:
         rep.error = "no token groups found"
@@ -211,6 +214,19 @@ def describe(rep: Report) -> None:
     print(f"      {flag} {label:<28} declared={rep.declared:<5} "
           f"actual={rep.actual:<5} sims(SDSC)={rep.sdsc_count:<5} "
           f"tail={len(rep.trailing)}B")
+    # A truncated store is always an exact multiple of 32 KB: the game
+    # serialises into a buffer that grows in 32 KB chunks, and a failed write
+    # keeps only the whole chunks. Healthy stores end at an arbitrary size.
+    # This is corroborating evidence, and a warning when a healthy hood is
+    # sitting just past a boundary with little to lose.
+    over = rep.ngbh_size % CHUNK
+    if rep.ngbh_size and over == 0:
+        print(f"        NGBH is exactly {rep.ngbh_size // CHUNK} x 32 KB — "
+              f"the hallmark of a lost final buffer chunk")
+    elif rep.healthy and over and over < 4096:
+        print(f"        note: NGBH is only {over} bytes past a 32 KB boundary; "
+              f"a failed save here would truncate to {rep.ngbh_size - over}")
+
     if not rep.healthy:
         gap = rep.declared - rep.actual
         if gap:
