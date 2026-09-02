@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 import SimKit
 
 /// The right column: header, a tab strip, and the chosen view of the

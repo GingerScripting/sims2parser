@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 import AppKit
 import SimKit
 
@@ -374,24 +375,8 @@ struct TokensView: View {
             Divider()
             HStack(spacing: 0) {
                 List(selection: $selection) {
-                    ForEach(["first", "second"], id: \.self) { list in
-                        let items = list == "first" ? first : second
-                        Section(list == "first" ? "First list" : "Second list") {
-                            ForEach(Array(items.enumerated()), id: \.offset) { i, t in
-                                if !onlyMemories || isMemory(t) {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 1) {
-                                            Text(t.name.isEmpty ? hex8(t.guid) : t.name).lineLimit(1)
-                                            Text(subjectLine(t)).font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        if isMemory(t) { Image(systemName: "brain").foregroundStyle(.secondary) }
-                                    }
-                                    .tag("\(list)/\(i)")
-                                }
-                            }
-                        }
-                    }
+                    tokenSection("first", title: "First list", items: first)
+                    tokenSection("second", title: "Second list", items: second)
                 }
                 .frame(minWidth: 360)
                 Divider()
@@ -433,6 +418,27 @@ struct TokensView: View {
         .onAppear { first = detail.tokens.first; second = detail.tokens.second }
         .onChange(of: detail.tokens.first) { first = $0 }
         .onChange(of: detail.tokens.second) { second = $0 }
+    }
+
+    private func tokenSection(_ list: String, title: String, items: [SimToken]) -> some View {
+        Section(title) {
+            ForEach(items.indices, id: \.self) { i in
+                if !onlyMemories || isMemory(items[i]) {
+                    tokenRow(items[i]).tag("\(list)/\(i)")
+                }
+            }
+        }
+    }
+
+    private func tokenRow(_ t: SimToken) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(t.name.isEmpty ? hex8(t.guid) : t.name).lineLimit(1)
+                Text(subjectLine(t)).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if isMemory(t) { Image(systemName: "brain").foregroundStyle(.secondary) }
+        }
     }
 
     private func subjectLine(_ t: SimToken) -> String {

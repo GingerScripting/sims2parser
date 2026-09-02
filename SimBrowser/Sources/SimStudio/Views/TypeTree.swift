@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// The left column: every resource type in the package with its count, each
 /// expandable into the groups it spans. Selecting a row filters the table.

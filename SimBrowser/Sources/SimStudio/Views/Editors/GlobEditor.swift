@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// GLOB: which semi-global tree set the object inherits.
 struct GlobEditor: View {

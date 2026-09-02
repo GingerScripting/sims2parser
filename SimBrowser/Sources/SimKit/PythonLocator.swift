@@ -29,6 +29,11 @@ public enum PythonLocator {
     /// UserDefaults, the copy bundled inside the app, then a source checkout.
     public static func script(_ name: String, defaultsKey: String? = nil) -> String {
         if let key = defaultsKey, let custom = UserDefaults.standard.string(forKey: key) { return custom }
+        // `S2_TOOLKIT_DIR` names the folder holding the scripts — how the
+        // drive executable points at the checkout it was built from.
+        if let dir = ProcessInfo.processInfo.environment["S2_TOOLKIT_DIR"] {
+            return (dir as NSString).appendingPathComponent(name)
+        }
         if let bundled = Bundle.main.resourceURL?.appendingPathComponent(name).path,
            FileManager.default.isReadableFile(atPath: bundled) {
             return bundled

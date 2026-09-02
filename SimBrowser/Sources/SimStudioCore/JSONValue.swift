@@ -6,7 +6,7 @@ import SwiftUI
 /// and the editors mutate it in place before sending it back. Keys are kept
 /// verbatim (`$type`, `_name_raw`), which is why this is not run through
 /// `convertFromSnakeCase`.
-enum JSONValue: Equatable, Hashable {
+public enum JSONValue: Equatable, Hashable {
     case null
     case bool(Bool)
     case number(Double)
@@ -16,7 +16,7 @@ enum JSONValue: Equatable, Hashable {
 }
 
 extension JSONValue: Codable {
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() { self = .null; return }
         if let b = try? c.decode(Bool.self) { self = .bool(b); return }
@@ -27,7 +27,7 @@ extension JSONValue: Codable {
         throw DecodingError.dataCorruptedError(in: c, debugDescription: "unsupported JSON value")
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         switch self {
         case .null: try c.encodeNil()
@@ -43,8 +43,8 @@ extension JSONValue: Codable {
     }
 }
 
-extension JSONValue {
-    subscript(key: String) -> JSONValue? {
+public extension JSONValue {
+    public subscript(key: String) -> JSONValue? {
         get {
             if case .object(let o) = self { return o[key] }
             return nil
@@ -56,7 +56,7 @@ extension JSONValue {
         }
     }
 
-    subscript(index: Int) -> JSONValue? {
+    public subscript(index: Int) -> JSONValue? {
         get {
             if case .array(let a) = self, a.indices.contains(index) { return a[index] }
             return nil
@@ -68,29 +68,29 @@ extension JSONValue {
         }
     }
 
-    var stringValue: String? { if case .string(let s) = self { return s }; return nil }
-    var doubleValue: Double? { if case .number(let n) = self { return n }; return nil }
-    var intValue: Int? { doubleValue.map { Int($0) } }
-    var boolValue: Bool? {
+    public var stringValue: String? { if case .string(let s) = self { return s }; return nil }
+    public var doubleValue: Double? { if case .number(let n) = self { return n }; return nil }
+    public var intValue: Int? { doubleValue.map { Int($0) } }
+    public var boolValue: Bool? {
         if case .bool(let b) = self { return b }
         if case .number(let n) = self { return n != 0 }
         return nil
     }
-    var arrayValue: [JSONValue]? { if case .array(let a) = self { return a }; return nil }
-    var objectValue: [String: JSONValue]? { if case .object(let o) = self { return o }; return nil }
-    var isNull: Bool { if case .null = self { return true }; return false }
+    public var arrayValue: [JSONValue]? { if case .array(let a) = self { return a }; return nil }
+    public var objectValue: [String: JSONValue]? { if case .object(let o) = self { return o }; return nil }
+    public var isNull: Bool { if case .null = self { return true }; return false }
 
     /// The dataclass name the daemon tagged this object with.
-    var typeName: String? { self["$type"]?.stringValue }
+    public var typeName: String? { self["$type"]?.stringValue }
 
     /// Bytes carried as `{"$hex": "..."}`.
-    var hexBytes: [UInt8]? {
+    public var hexBytes: [UInt8]? {
         guard let s = self["$hex"]?.stringValue else { return nil }
         return [UInt8](hex: s)
     }
 
-    static func hex(_ bytes: [UInt8]) -> JSONValue { .object(["$hex": .string(bytes.hexString)]) }
-    static func int(_ v: Int) -> JSONValue { .number(Double(v)) }
+    public static func hex(_ bytes: [UInt8]) -> JSONValue { .object(["$hex": .string(bytes.hexString)]) }
+    public static func int(_ v: Int) -> JSONValue { .number(Double(v)) }
 
     mutating func append(_ value: JSONValue) {
         guard case .array(var a) = self else { return }
@@ -105,51 +105,51 @@ extension JSONValue {
     }
 
     /// Pretty JSON text, for the generic editor and for debugging.
-    var prettyPrinted: String {
+    public var prettyPrinted: String {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         return (try? enc.encode(self)).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
     }
 
-    static func parse(_ text: String) throws -> JSONValue {
+    public static func parse(_ text: String) throws -> JSONValue {
         try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
     }
 }
 
 // MARK: - Bindings into a JSON tree
 
-extension Binding where Value == JSONValue {
-    subscript(key: String) -> Binding<JSONValue> {
+public extension Binding where Value == JSONValue {
+    public subscript(key: String) -> Binding<JSONValue> {
         Binding<JSONValue>(
             get: { wrappedValue[key] ?? .null },
             set: { wrappedValue[key] = $0 })
     }
 
-    subscript(index: Int) -> Binding<JSONValue> {
+    public subscript(index: Int) -> Binding<JSONValue> {
         Binding<JSONValue>(
             get: { wrappedValue[index] ?? .null },
             set: { wrappedValue[index] = $0 })
     }
 
-    func string(_ key: String) -> Binding<String> {
+    public func string(_ key: String) -> Binding<String> {
         Binding<String>(
             get: { wrappedValue[key]?.stringValue ?? "" },
             set: { wrappedValue[key] = .string($0) })
     }
 
-    func int(_ key: String) -> Binding<Int> {
+    public func int(_ key: String) -> Binding<Int> {
         Binding<Int>(
             get: { wrappedValue[key]?.intValue ?? 0 },
             set: { wrappedValue[key] = .int($0) })
     }
 
-    var intValue: Binding<Int> {
+    public var intValue: Binding<Int> {
         Binding<Int>(
             get: { wrappedValue.intValue ?? 0 },
             set: { wrappedValue = .int($0) })
     }
 
-    var stringValue: Binding<String> {
+    public var stringValue: Binding<String> {
         Binding<String>(
             get: { wrappedValue.stringValue ?? "" },
             set: { wrappedValue = .string($0) })
@@ -158,8 +158,8 @@ extension Binding where Value == JSONValue {
 
 // MARK: - Hex helpers
 
-extension Array where Element == UInt8 {
-    init?(hex: String) {
+public extension Array where Element == UInt8 {
+    public init?(hex: String) {
         var out: [UInt8] = []
         out.reserveCapacity(hex.utf8.count / 2)
         var high: UInt8?
@@ -178,7 +178,7 @@ extension Array where Element == UInt8 {
         self = out
     }
 
-    var hexString: String {
+    public var hexString: String {
         var s = ""
         s.reserveCapacity(count * 2)
         for b in self { s += String(format: "%02x", b) }
@@ -186,11 +186,11 @@ extension Array where Element == UInt8 {
     }
 }
 
-func hex8(_ v: UInt32) -> String { String(format: "0x%08X", v) }
-func hex4(_ v: Int) -> String { String(format: "0x%04X", v & 0xFFFF) }
+public func hex8(_ v: UInt32) -> String { String(format: "0x%08X", v) }
+public func hex4(_ v: Int) -> String { String(format: "0x%04X", v & 0xFFFF) }
 
 /// Parse "0x1F", "1F" (when hex is the default), or "31".
-func parseNumber(_ text: String, hexByDefault: Bool = false) -> Int? {
+public func parseNumber(_ text: String, hexByDefault: Bool = false) -> Int? {
     let t = text.trimmingCharacters(in: .whitespaces)
     if t.hasPrefix("0x") || t.hasPrefix("0X") { return Int(t.dropFirst(2), radix: 16) }
     if hexByDefault { return Int(t, radix: 16) }

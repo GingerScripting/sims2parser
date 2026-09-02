@@ -1,43 +1,44 @@
 import Foundation
 import SwiftUI
 import SimKit
+import AppKit
 
 /// One open package: its daemon, its index, the selected resource, and the
 /// edits in flight. The daemon is the source of truth for bytes, dirtiness,
 /// and history; this object mirrors what it says and never holds a byte the
 /// daemon has not handed over as hex for display.
 @MainActor
-final class PackageSession: ObservableObject, Identifiable {
-    enum Phase: Equatable {
+public final class PackageSession: ObservableObject, Identifiable {
+    public enum Phase: Equatable {
         case opening
         case ready
         case failed(String)
     }
 
-    let url: URL
-    let id = UUID()
+    public let url: URL
+    public let id = UUID()
 
-    @Published private(set) var phase: Phase = .opening
-    @Published private(set) var summary: PackageSummary?
-    @Published private(set) var rows: [ResourceRow] = []
-    @Published private(set) var meta: Meta?
-    @Published private(set) var bhavMeta: BhavMeta?
-    @Published private(set) var detail: ResourceDetail?
-    @Published private(set) var detailLoading = false
-    @Published private(set) var busy = false
-    @Published var errorMessage: String?
-    @Published private(set) var progress: Progress?
+    @Published public private(set) var phase: Phase = .opening
+    @Published public private(set) var summary: PackageSummary?
+    @Published public private(set) var rows: [ResourceRow] = []
+    @Published public private(set) var meta: Meta?
+    @Published public private(set) var bhavMeta: BhavMeta?
+    @Published public private(set) var detail: ResourceDetail?
+    @Published public private(set) var detailLoading = false
+    @Published public private(set) var busy = false
+    @Published public var errorMessage: String?
+    @Published public private(set) var progress: TaskProgress?
 
     /// What the table has selected. The detail pane follows a single
     /// selection; the context menu and split act on the whole set.
-    @Published var selectedTGIs: Set<TGI> = [] {
+    @Published public var selectedTGIs: Set<TGI> = [] {
         didSet {
             let single = selectedTGIs.count == 1 ? selectedTGIs.first : nil
             if single != selection { selection = single }
         }
     }
 
-    @Published private(set) var selection: TGI? {
+    @Published public private(set) var selection: TGI? {
         didSet { if selection != oldValue { loadDetail() } }
     }
 
@@ -47,7 +48,7 @@ final class PackageSession: ObservableObject, Identifiable {
     /// a newer one.
     private var detailGeneration = 0
 
-    init(url: URL) {
+    public init(url: URL) {
         self.url = url
         trace("session \(id.uuidString.prefix(8)) init \(url.lastPathComponent)")
     }
@@ -60,21 +61,21 @@ final class PackageSession: ObservableObject, Identifiable {
 
     // MARK: Derived
 
-    var isReadonly: Bool { summary?.readonly ?? true }
-    var isDirty: Bool { summary?.dirty ?? false }
-    var canUndo: Bool { summary?.canUndo ?? false }
-    var canRedo: Bool { summary?.canRedo ?? false }
-    var undoLabel: String { summary?.undoLabel.map { "Undo \($0)" } ?? "Undo" }
-    var redoLabel: String { summary?.redoLabel.map { "Redo \($0)" } ?? "Redo" }
-    var currentURL: URL { summary.map { URL(fileURLWithPath: $0.path) } ?? url }
-    var title: String { currentURL.lastPathComponent }
+    public var isReadonly: Bool { summary?.readonly ?? true }
+    public var isDirty: Bool { summary?.dirty ?? false }
+    public var canUndo: Bool { summary?.canUndo ?? false }
+    public var canRedo: Bool { summary?.canRedo ?? false }
+    public var undoLabel: String { summary?.undoLabel.map { "Undo \($0)" } ?? "Undo" }
+    public var redoLabel: String { summary?.redoLabel.map { "Redo \($0)" } ?? "Redo" }
+    public var currentURL: URL { summary.map { URL(fileURLWithPath: $0.path) } ?? url }
+    public var title: String { currentURL.lastPathComponent }
 
-    func typeName(_ type: UInt32) -> String { meta?.typeName(type) ?? hex8(type) }
+    public func typeName(_ type: UInt32) -> String { meta?.typeName(type) ?? hex8(type) }
 
     // MARK: Lifecycle
 
     /// Launch the daemon and open the package. Called once from the window.
-    func start() async {
+    public func start() async {
         trace("session \(id.uuidString.prefix(8)) start (client \(client == nil ? "nil" : "set"))")
         guard client == nil else { return }
         let python = PythonLocator.interpreter()
@@ -82,7 +83,7 @@ final class PackageSession: ObservableObject, Identifiable {
         do {
             let c = try JSONRPCClient(python: python, script: script)
             c.onEvent = { [weak self] value in
-                guard let p = Progress(value) else { return }
+                guard let p = TaskProgress(value) else { return }
                 Task { @MainActor in self?.progress = p.done >= p.total ? nil : p }
             }
             client = c
@@ -97,14 +98,14 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func close() {
+    public func close() {
         client?.shutdown()
         client = nil
     }
 
     // MARK: Reads
 
-    func reloadIndex() async {
+    public func reloadIndex() async {
         guard let c = client else { return }
         do {
             rows = try ResourceRow.rows(fromIndex: await c.callRaw("index"))
@@ -138,12 +139,12 @@ final class PackageSession: ObservableObject, Identifiable {
     }
 
     /// Re-fetch the selected resource after an edit, keeping the selection.
-    func refreshDetail() {
+    public func refreshDetail() {
         loadDetail()
     }
 
     /// Fetched once, the first time a BHAV editor opens.
-    func loadBhavMeta() async {
+    public func loadBhavMeta() async {
         guard bhavMeta == nil, let c = client else { return }
         do {
             bhavMeta = try await c.call("bhav_meta", as: BhavMeta.self)
@@ -154,7 +155,7 @@ final class PackageSession: ObservableObject, Identifiable {
 
     /// Insert, delete, or move an instruction in a draft. Pure on the
     /// daemon side: the package is untouched until the draft is applied.
-    func bhavTransform(_ decoded: JSONValue, op: String, index: Int, to: Int? = nil) async -> BhavTransform? {
+    public func bhavTransform(_ decoded: JSONValue, op: String, index: Int, to: Int? = nil) async -> BhavTransform? {
         guard let c = client else { return nil }
         var params: [String: JSONValue] = ["decoded": decoded, "op": .string(op), "index": .int(index)]
         if let to { params["to"] = .int(to) }
@@ -169,7 +170,7 @@ final class PackageSession: ObservableObject, Identifiable {
     // MARK: Edits
 
     @discardableResult
-    func putDecoded(_ tgi: TGI, _ value: JSONValue) async -> Bool {
+    public func putDecoded(_ tgi: TGI, _ value: JSONValue) async -> Bool {
         await mutate {
             let r = try await $0.call("put_resource", ["tgi": tgi.json, "decoded": value], as: PutResult.self)
             self.summary = r.summary
@@ -178,7 +179,7 @@ final class PackageSession: ObservableObject, Identifiable {
     }
 
     @discardableResult
-    func putHex(_ tgi: TGI, _ bytes: [UInt8]) async -> Bool {
+    public func putHex(_ tgi: TGI, _ bytes: [UInt8]) async -> Bool {
         await mutate {
             let r = try await $0.call("put_resource", ["tgi": tgi.json, "hex": .string(bytes.hexString)], as: PutResult.self)
             self.summary = r.summary
@@ -186,7 +187,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func addResource(_ tgi: TGI, bytes: [UInt8], compressed: Bool = false) async -> Bool {
+    public func addResource(_ tgi: TGI, bytes: [UInt8], compressed: Bool = false) async -> Bool {
         await mutate {
             let r = try await $0.call("add_resource", ["tgi": tgi.json, "hex": .string(bytes.hexString),
                                                        "compressed": .bool(compressed)], as: RowResult.self)
@@ -196,7 +197,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func delete(_ tgis: [TGI]) async -> Bool {
+    public func delete(_ tgis: [TGI]) async -> Bool {
         guard !tgis.isEmpty else { return false }
         return await mutate {
             self.summary = try await $0.call("delete_resource", ["tgis": .array(tgis.map(\.json))], as: PackageSummary.self)
@@ -206,7 +207,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func rename(_ tgi: TGI, to newTGI: TGI) async -> Bool {
+    public func rename(_ tgi: TGI, to newTGI: TGI) async -> Bool {
         await mutate {
             let r = try await $0.call("rename_resource", ["tgi": tgi.json, "new_tgi": newTGI.json], as: RowResult.self)
             self.summary = r.summary
@@ -218,7 +219,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func setCompressed(_ tgis: [TGI], _ flag: Bool) async -> Bool {
+    public func setCompressed(_ tgis: [TGI], _ flag: Bool) async -> Bool {
         await mutate {
             self.summary = try await $0.call("set_compressed", ["tgis": .array(tgis.map(\.json)),
                                                                  "compressed": .bool(flag)], as: PackageSummary.self)
@@ -226,7 +227,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func setAllCompressed(_ flag: Bool) async -> Bool {
+    public func setAllCompressed(_ flag: Bool) async -> Bool {
         await mutate {
             self.summary = try await $0.call("set_compressed", ["all": .bool(true), "compressed": .bool(flag)],
                                              as: PackageSummary.self)
@@ -234,11 +235,11 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func undo() async {
+    public func undo() async {
         await history("undo")
     }
 
-    func redo() async {
+    public func redo() async {
         await history("redo")
     }
 
@@ -261,25 +262,25 @@ final class PackageSession: ObservableObject, Identifiable {
 
     // MARK: Files
 
-    func save() async -> Bool {
+    public func save() async -> Bool {
         await mutate {
             self.summary = try await $0.call("save", as: PackageSummary.self)
         }
     }
 
-    func saveAs(_ dest: URL) async -> Bool {
+    public func saveAs(_ dest: URL) async -> Bool {
         await mutate {
             self.summary = try await $0.call("save_as", ["path": .string(dest.path)], as: PackageSummary.self)
         }
     }
 
-    func exportBytes(_ tgi: TGI, to dest: URL) async -> Bool {
+    public func exportBytes(_ tgi: TGI, to dest: URL) async -> Bool {
         await mutate {
             _ = try await $0.call("export_resource", ["tgi": tgi.json, "path": .string(dest.path)], as: JSONValue.self)
         }
     }
 
-    func importBytes(_ tgi: TGI, from src: URL) async -> Bool {
+    public func importBytes(_ tgi: TGI, from src: URL) async -> Bool {
         await mutate {
             let r = try await $0.call("import_resource", ["tgi": tgi.json, "path": .string(src.path)], as: PutResult.self)
             self.summary = r.summary
@@ -289,19 +290,19 @@ final class PackageSession: ObservableObject, Identifiable {
 
     // MARK: Object Workshop and tools
 
-    func objects() async -> [ObjectInfo] {
+    public func objects() async -> [ObjectInfo] {
         guard let c = client else { return [] }
         do { return try await c.call("objects", as: ObjectsResult.self).objects }
         catch { report(error); return [] }
     }
 
-    func deriveGuid(seed: String) async -> UInt32? {
+    public func deriveGuid(seed: String) async -> UInt32? {
         guard let c = client else { return nil }
         struct R: Decodable { let guid: UInt32 }
         return try? await c.call("derive_guid", ["seed": .string(seed)], as: R.self).guid
     }
 
-    func clone(guid: UInt32?, selectGuid: UInt32?, name: String?, description: String?,
+    public func clone(guid: UInt32?, selectGuid: UInt32?, name: String?, description: String?,
                price: Int?, aggressive: Bool) async -> CloneResult? {
         guard let c = client else { return nil }
         var p: [String: JSONValue] = ["aggressive": .bool(aggressive)]
@@ -324,7 +325,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func scanGuids(_ guids: [UInt32]) async -> ScanResult? {
+    public func scanGuids(_ guids: [UInt32]) async -> ScanResult? {
         guard let c = client else { return nil }
         do {
             return try await c.call("scan_guids", ["guids": .array(guids.map { .number(Double($0)) })],
@@ -335,7 +336,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func merge(_ url: URL, replace: Bool) async -> MergeResult? {
+    public func merge(_ url: URL, replace: Bool) async -> MergeResult? {
         guard let c = client else { return nil }
         busy = true
         defer { busy = false }
@@ -352,7 +353,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func split(_ tgis: [TGI], to url: URL, remove: Bool) async -> SplitResult? {
+    public func split(_ tgis: [TGI], to url: URL, remove: Bool) async -> SplitResult? {
         guard let c = client, !tgis.isEmpty else { return nil }
         busy = true
         defer { busy = false }
@@ -372,7 +373,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func doctor(downloadsOnly: Bool, hashFiles: Bool) async -> DoctorResult? {
+    public func doctor(downloadsOnly: Bool, hashFiles: Bool) async -> DoctorResult? {
         guard let c = client else { return nil }
         do {
             return try await c.call("doctor", ["downloads_only": .bool(downloadsOnly),
@@ -384,17 +385,17 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func previewTexture(_ tgi: TGI) async throws -> TexturePreview {
+    public func previewTexture(_ tgi: TGI) async throws -> TexturePreview {
         guard let c = client else { throw RPCFailure.transport("not open") }
         return try await c.call("preview_texture", ["tgi": tgi.json], as: TexturePreview.self)
     }
 
-    func previewMesh(_ tgi: TGI) async throws -> MeshPreview {
+    public func previewMesh(_ tgi: TGI) async throws -> MeshPreview {
         guard let c = client else { throw RPCFailure.transport("not open") }
         return try await c.call("preview_mesh", ["tgi": tgi.json], as: MeshPreview.self)
     }
 
-    func exportTexture(_ tgi: TGI, to url: URL) async {
+    public func exportTexture(_ tgi: TGI, to url: URL) async {
         guard let c = client else { return }
         do { _ = try await c.call("export_texture", ["tgi": tgi.json, "path": .string(url.path)], as: JSONValue.self) }
         catch { report(error) }
@@ -402,21 +403,21 @@ final class PackageSession: ObservableObject, Identifiable {
 
     // MARK: Neighborhoods
 
-    @Published private(set) var hoodMeta: HoodMeta?
-    @Published private(set) var sims: [SimRow] = []
-    @Published private(set) var simsLoading = false
+    @Published public private(set) var hoodMeta: HoodMeta?
+    @Published public private(set) var sims: [SimRow] = []
+    @Published public private(set) var simsLoading = false
 
-    var isHood: Bool { hoodMeta?.isHood ?? false }
+    public var isHood: Bool { hoodMeta?.isHood ?? false }
 
     /// Ask whether this package is a neighborhood, and what hoodcheck says
     /// about its token store. Cheap: the daemon walks the store it holds in
     /// memory, so this is re-asked after every edit of a hood.
-    func loadHoodMeta() async {
+    public func loadHoodMeta() async {
         guard let c = client else { return }
         hoodMeta = try? await c.call("hood_meta", as: HoodMeta.self)
     }
 
-    func loadSims() async {
+    public func loadSims() async {
         guard let c = client, sims.isEmpty else { return }
         simsLoading = true
         defer { simsLoading = false }
@@ -424,13 +425,13 @@ final class PackageSession: ObservableObject, Identifiable {
         catch { report(error) }
     }
 
-    func sim(_ nid: Int) async -> SimDetail? {
+    public func sim(_ nid: Int) async -> SimDetail? {
         guard let c = client else { return nil }
         do { return try await c.call("hood_sim", ["nid": .int(nid)], as: SimDetail.self) }
         catch { report(error); return nil }
     }
 
-    func putSim(_ nid: Int, fields: [String: Int]) async -> Bool {
+    public func putSim(_ nid: Int, fields: [String: Int]) async -> Bool {
         await mutate {
             let r = try await $0.call("hood_put_sim", ["nid": .int(nid),
                 "fields": .object(fields.mapValues { .int($0) })], as: PutResult.self)
@@ -440,7 +441,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func putRelationship(owner: Int, target: Int, fields: [String: Int]) async -> Bool {
+    public func putRelationship(owner: Int, target: Int, fields: [String: Int]) async -> Bool {
         await mutate {
             let r = try await $0.call("hood_put_srel", ["owner": .int(owner), "target": .int(target),
                 "fields": .object(fields.mapValues { .int($0) })], as: PutResult.self)
@@ -448,7 +449,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func putTokens(_ nid: Int, first: [SimToken], second: [SimToken]) async -> Bool {
+    public func putTokens(_ nid: Int, first: [SimToken], second: [SimToken]) async -> Bool {
         await mutate {
             let r = try await $0.call("hood_put_tokens", ["nid": .int(nid),
                 "first": .array(first.map(\.json)), "second": .array(second.map(\.json))], as: PutResult.self)
@@ -456,7 +457,7 @@ final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
-    func hoodSaveAs(_ dir: URL) async -> Bool {
+    public func hoodSaveAs(_ dir: URL) async -> Bool {
         await mutate {
             self.summary = try await $0.call("hood_save_as", ["dir": .string(dir.path)],
                                              as: PackageSummary.self, timeout: 900)
@@ -513,7 +514,7 @@ final class PackageSession: ObservableObject, Identifiable {
 }
 
 /// stderr breadcrumbs when SIMSTUDIO_TRACE is set; see JSONRPCClient.tracing.
-func trace(_ message: @autoclosure () -> String) {
+public func trace(_ message: @autoclosure () -> String) {
     if JSONRPCClient.tracing {
         FileHandle.standardError.write(Data((message() + "\n").utf8))
     }

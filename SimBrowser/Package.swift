@@ -11,6 +11,14 @@ let package = Package(
     targets: [
         .target(name: "SimKit", path: "Sources/SimKit"),
         .executableTarget(name: "SimBrowser", dependencies: ["SimKit"], path: "Sources/SimBrowser"),
-        .executableTarget(name: "SimStudio", dependencies: ["SimKit"], path: "Sources/SimStudio"),
+        // Sim Studio's bridge and session layer, apart from its views so a
+        // second executable can drive it without a window.
+        .target(name: "SimStudioCore", dependencies: ["SimKit"], path: "Sources/SimStudioCore"),
+        .executableTarget(name: "SimStudio", dependencies: ["SimKit", "SimStudioCore"], path: "Sources/SimStudio"),
+        // Walks the editing flow through PackageSession and the real daemon
+        // on a scratch copy of a donor: `swift run SimStudioDrive`. Not a
+        // test target on purpose — XCTest and Swift Testing both need Xcode,
+        // and the README asks only for the Command Line Tools.
+        .executableTarget(name: "SimStudioDrive", dependencies: ["SimStudioCore"], path: "Sources/SimStudioDrive"),
     ]
 )

@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 import AppKit
 import SceneKit
 

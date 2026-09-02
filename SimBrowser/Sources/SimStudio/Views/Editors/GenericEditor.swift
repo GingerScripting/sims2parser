@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// Fallback for a decoded type without a dedicated form: the JSON the
 /// daemon produced, editable as text. Anything the daemon can rebuild from

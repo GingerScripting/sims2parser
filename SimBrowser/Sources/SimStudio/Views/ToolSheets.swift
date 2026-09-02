@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 import AppKit
 
 /// Which tool sheet is up.
@@ -20,7 +21,7 @@ enum Tool: Identifiable {
 
 /// A progress line for the long-running tools.
 struct ProgressLine: View {
-    let progress: Progress?
+    let progress: TaskProgress?
     let fallback: String
 
     var body: some View {

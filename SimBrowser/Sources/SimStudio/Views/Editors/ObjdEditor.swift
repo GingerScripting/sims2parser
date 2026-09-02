@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// OBJD: 108 u16 words, with the confirmed ones named and the GUID pairs
 /// exposed as 32-bit values. The daemon serves the name tables, so nothing

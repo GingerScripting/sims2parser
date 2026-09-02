@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// A classic 16-bytes-per-row dump: offset, hex, ASCII. Rows are built on
 /// demand so a multi-megabyte texture costs nothing until scrolled to.
