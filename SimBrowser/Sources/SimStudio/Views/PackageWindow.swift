@@ -69,8 +69,10 @@ struct PackageWindow: View {
             }
         }
         .frame(minWidth: 1180, minHeight: 640)
-        .navigationTitle(session.title + (session.isDirty ? " — Edited" : ""))
+        .navigationTitle(session.title)
+        .navigationSubtitle(folderLabel)
         .navigationDocument(session.currentURL)
+        .background(WindowEditedMarker(isEdited: session.isDirty))
         .focusedSceneValue(\.session, session)
         .alert("Sim Studio", isPresented: Binding(
             get: { session.errorMessage != nil },
@@ -127,7 +129,9 @@ struct PackageWindow: View {
             statusBar
         }
         .toolbar {
-            ToolbarItemGroup(placement: .navigation) {
+            // Nothing in the navigation placement: the title belongs at the
+            // leading edge, not squeezed after a run of buttons.
+            ToolbarItemGroup(placement: .primaryAction) {
                 if session.isHood {
                     Picker("Mode", selection: $mode) {
                         ForEach(Mode.allCases) { m in Text(m.rawValue).tag(m) }
@@ -141,8 +145,6 @@ struct PackageWindow: View {
                 Button { Task { await session.redo() } } label: { Label(session.redoLabel, systemImage: "arrow.uturn.forward") }
                     .disabled(!session.canRedo)
                     .help(session.redoLabel)
-            }
-            ToolbarItemGroup(placement: .primaryAction) {
                 Menu {
                     Button("Clone Object…") { tool = .clone }
                     Button("Merge Package Into This…") { tool = .merge }
@@ -175,6 +177,14 @@ struct PackageWindow: View {
             }
         }
         .searchable(text: $search, placement: .toolbar, prompt: "Filter by group, instance, or type")
+    }
+
+    /// The file's folder, with the home directory abbreviated — so a scratch
+    /// copy and the real file in Downloads are told apart at a glance.
+    private var folderLabel: String {
+        let folder = session.currentURL.deletingLastPathComponent().path
+        let home = NSHomeDirectory()
+        return folder.hasPrefix(home) ? "~" + folder.dropFirst(home.count) : folder
     }
 
     private var statusBar: some View {
