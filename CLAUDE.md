@@ -55,8 +55,14 @@ cd SimBrowser && swift build          # compile check for SimKit + both apps
 ```
 
 Sim Studio can be driven headless when its window can't be seen:
-`SIMSTUDIO_TRACE=1` logs every RPC to stderr and `SIMSTUDIO_OPEN=<file>`
-opens that package at launch.
+`SIMSTUDIO_TRACE=1` logs every RPC and detail load to stderr,
+`SIMSTUDIO_OPEN=<file>` opens that package at launch, and
+`SIMSTUDIO_SELFDRIVE=1` with it walks the editing flow through the app's own
+`PackageSession` — select a STR#, edit, apply, undo/redo, add/rename/
+compress/delete, save, re-open, BHAV insert/apply/undo — and exits 0 or 1
+(`Session/SelfDrive.swift`). Run it on a scratch copy; it saves. It found the
+detail-pane decode bug and a stale-refresh race that the daemon smoke test
+could not see, but it is not a substitute for clicking through the views.
 
 ```sh
 python3 s2neighborhood.py --hood N002 --out /tmp/sims.json   # extract one hood

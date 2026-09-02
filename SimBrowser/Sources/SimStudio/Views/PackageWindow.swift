@@ -22,7 +22,14 @@ struct PackageRoot: View {
         // daemon. The session shuts it down when the window's state object
         // is released instead.
         PackageWindow(session: session)
-            .task { await session.start() }
+            .task {
+                await session.start()
+                // Unstructured on purpose: SwiftUI cancels this `.task` when
+                // the root view cycles on first show, and a cancelled task's
+                // sleeps return at once, which turned the drive's waits into
+                // instant failures.
+                if SelfDrive.applies(to: session) { SelfDrive.launch(session) }
+            }
             .onOpenURL { url in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { openWindow(value: url) }
             }

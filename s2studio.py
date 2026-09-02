@@ -530,7 +530,8 @@ def m_get_resource(session: Session, params: dict) -> dict:
         except (ValueError, struct.error, IndexError) as exc:
             out["decode_error"] = str(exc)
     if r.type_id == s2object.TYPE_BHAV:
-        out["bhav"] = _render_bhav(session, r)
+        # Under its own key: "bhav" is the row's boolean flag.
+        out["bhav_render"] = _render_bhav(session, r)
     return out
 
 
