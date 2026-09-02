@@ -83,18 +83,22 @@ def expect_error(code: str, fn, *a, **kw):
 
 
 def pick_donor() -> "Path | None":
-    """A sample package with at least one decodable STR#."""
+    """A sample package with a STR# and, preferably, a BHAV as well."""
     samples = ROOT / "sample-packages"
     if not samples.is_dir():
         return None
+    fallback = None
     for p in sorted(samples.rglob("*.package")):
         try:
             _, entries = s2parser.open_package(p)
         except Exception:
             continue
-        if any(e.type_id == s2object.TYPE_STR for e in entries):
+        types = {e.type_id for e in entries}
+        if s2object.TYPE_STR in types and s2object.TYPE_BHAV in types:
             return p
-    return None
+        if s2object.TYPE_STR in types and fallback is None:
+            fallback = p
+    return fallback
 
 
 def main() -> int:
@@ -216,6 +220,32 @@ def main() -> int:
             finally:
                 c4.close()
             print("game install package: opened read-only")
+
+            # BHAV: decode, render, transform a draft, apply, and read back.
+            brow = next((r for r in rows if r["flags"] & 4), None)
+            if brow is not None:
+                btgi = {"type": brow["type"], "group": brow["group"],
+                        "instance": brow["instance"], "instance_hi": brow["instance_hi"]}
+                got = c.call("get_resource", tgi=btgi)
+                assert got["decoded"]["$type"] == "BhavRes" and got["bhav"].get("tree"), got["bhav"]
+                bmeta = c.call("bhav_meta")
+                assert "2" in bmeta["layouts"] and bmeta["sentinels"]["true"] == 0xFFFD
+                n = len(got["decoded"]["instructions"])
+                r = c.call("bhav_transform", decoded=got["decoded"], op="insert", index=0)
+                assert len(r["decoded"]["instructions"]) == n + 1 and not r["warnings"]
+                r = c.call("bhav_transform", decoded=r["decoded"], op="delete", index=0)
+                assert len(r["decoded"]["instructions"]) == n
+                assert bytes.fromhex(got["hex"]) == s2object.build_resource(
+                    brow["type"], _roundtrip(r["decoded"])), "insert+delete is not a no-op"
+                edited = r["decoded"]
+                edited["name"] = "Sim Studio tree"
+                r = c.call("put_resource", tgi=btgi, decoded=edited)
+                assert r["changed"]
+                back = c.call("get_resource", tgi=btgi)
+                assert back["decoded"]["name"] == "Sim Studio tree" and "Sim Studio tree" in back["bhav"]["flat"]
+                c.call("undo")
+                print(f"BHAV {got['decoded']['name']!r}: {n} instructions, "
+                      f"format 0x{got['decoded']['format_version']:04X}; transform/apply/undo OK")
 
             expect_error("unknown_method", c.call, "frobnicate")
             expect_error("bad_params", c.call, "get_resource", tgi="nope")

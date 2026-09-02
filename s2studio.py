@@ -421,7 +421,7 @@ def _bhav_names(session: Session) -> dict:
 
 def _render_bhav(session: Session, r: Resource) -> dict:
     try:
-        b = s2parser.parse_bhav(r.data)
+        b = s2object.bhav_to_listing(s2object.parse_bhav_rt(r.data))
     except (ValueError, struct.error) as exc:
         return {"error": str(exc)}
     names = _bhav_names(session)
@@ -709,6 +709,47 @@ def m_import_resource(session: Session, params: dict) -> dict:
                                     "label": f"Import {src.name}"})
 
 
+def m_bhav_meta(session: Session, params: dict) -> dict:
+    """Everything the BHAV editor needs to label things: primitive names,
+    the operand layouts s2object has pinned, and the exit sentinels."""
+    return {
+        "primitives": {str(k): v for k, v in s2parser.PRIMITIVES.items()},
+        "layouts": {str(k): v for k, v in s2object.BHAV_OPERAND_LAYOUTS.items()},
+        "sentinels": {"true": 0xFFFD, "false": 0xFFFE, "error": 0xFFFC, "floor": s2object.BHAV_SENTINEL_FLOOR},
+        "formats": {str(v): {"instr_size": l.instr_size, "operand_len": l.operand_len,
+                             "addr_width": l.addr_width}
+                    for v, l in s2object.BHAV_LAYOUTS.items()},
+    }
+
+
+def m_bhav_transform(session: Session, params: dict) -> dict:
+    """Insert, delete, or move an instruction in a decoded BHAV the client
+    holds as a draft. Pure: nothing in the package changes until the client
+    applies the result with put_resource. Branch targets are renumbered
+    here so the app never has to know what a target is."""
+    b = from_json(_need(params, "decoded"))
+    if not isinstance(b, s2object.BhavRes):
+        raise RpcError("bad_params", "decoded is not a BhavRes")
+    op = _need(params, "op")
+    try:
+        if op == "convert":
+            s2object.bhav_convert(b, int(params.get("version", 0x8007)))
+            warnings = []
+        else:
+            index = int(_need(params, "index"))
+            if op == "insert":
+                warnings = s2package.bhav_insert(b, index)
+            elif op == "delete":
+                warnings = s2package.bhav_delete(b, index)
+            elif op == "move":
+                warnings = s2package.bhav_move(b, index, int(_need(params, "to")))
+            else:
+                raise RpcError("bad_params", f"unknown op {op!r}")
+    except ValueError as exc:
+        raise RpcError("bad_params", str(exc)) from None
+    return {"decoded": to_json(b), "warnings": warnings}
+
+
 def m_shutdown(session: Session, params: dict) -> dict:
     return {"bye": True}
 
@@ -731,6 +772,8 @@ METHODS = {
     "save_as": m_save_as,
     "export_resource": m_export_resource,
     "import_resource": m_import_resource,
+    "bhav_meta": m_bhav_meta,
+    "bhav_transform": m_bhav_transform,
     "shutdown": m_shutdown,
 }
 

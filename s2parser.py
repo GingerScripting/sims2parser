@@ -552,10 +552,13 @@ PRIMITIVES = {
 # Destination sentinel values for u16 branch targets (formats 0x8007/0x8009).
 # Verified empirically: 0xFFFD = return true, 0xFFFE = return false,
 # 0xFFFC = error. No 1-byte forms here — a low value like 0x00FD is a
-# legitimate instruction index in a large tree.
+# legitimate instruction index in a large tree. 0xFFFF is the widened form
+# of the one-byte 0xFF that pre-0x8007 trees use where newer ones use
+# 0xFFFC (objects.package: 878 of the former, none of the latter, in old
+# trees; the reverse in new ones), so it is the error exit too.
 _TRUE_SENTINELS  = {0xFFFD}
 _FALSE_SENTINELS = {0xFFFE}
-_ERROR_SENTINELS = {0xFFFC}
+_ERROR_SENTINELS = {0xFFFC, 0xFFFF}
 
 def _dest_str(d: int) -> str:
     if d in _TRUE_SENTINELS:  return "→TRUE"
@@ -623,34 +626,90 @@ class Bhav:
         return self.fmt()
 
 
+@dataclass(frozen=True)
+class BhavLayout:
+    """How one BHAV format version lays out its instructions.
+
+    Solved by exact-length fit over the 16,000 trees in the game's
+    objects.package (every version fits 100%), and for the operand/tail order
+    by checking that Expression operator bytes land in the known table at
+    the same rate as in 0x8007 trees:
+
+        0x8000-0x8002: opcode u16, true u8, false u8, 8 operand bytes     (12)
+        0x8003-0x8004: opcode u16, true u8, false u8, 16 operand bytes    (20)
+        0x8005-0x8006: as above + 1 tail byte                             (21)
+        0x8007:        opcode u16, true u16, false u16, 16 operands, tail (23)
+        0x8009:        same, with a 5-byte extra header instead of 4      (23)
+
+    `extra_header` is the region between the counts (ending at +72) and the
+    first instruction — a tree version, and in 0x8009 one more byte. What it
+    means is not pinned, so s2object carries it raw.
+    """
+    addr_width: int      # 1 or 2 bytes per branch target
+    operand_len: int     # 8 or 16
+    tail_len: int        # 0 or 1
+    extra_header: int    # 4 or 5
+
+    @property
+    def instr_size(self) -> int:
+        return 2 + 2 * self.addr_width + self.operand_len + self.tail_len
+
+
+BHAV_LAYOUTS = {
+    0x8000: BhavLayout(1, 8, 0, 4),
+    0x8001: BhavLayout(1, 8, 0, 4),
+    0x8002: BhavLayout(1, 8, 0, 4),
+    0x8003: BhavLayout(1, 16, 0, 4),
+    0x8004: BhavLayout(1, 16, 0, 4),
+    0x8005: BhavLayout(1, 16, 1, 4),
+    0x8006: BhavLayout(1, 16, 1, 4),
+    0x8007: BhavLayout(2, 16, 1, 4),
+    0x8009: BhavLayout(2, 16, 1, 5),
+}
+
+# One-byte targets use 0xFC-0xFF where two-byte ones use 0xFFFC-0xFFFF, so a
+# widened target reads the same way whatever the format.
+BHAV_SENTINEL_FLOOR = 0xFFFC
+
+
+def widen_dest(d: int) -> int:
+    """A one-byte branch target in the two-byte form."""
+    return 0xFF00 | d if d >= 0xFC else d
+
+
 def parse_bhav(data: bytes) -> Bhav:
-    """Parse a BHAV resource (must already be decompressed)."""
+    """Parse a BHAV of any known format (must already be decompressed).
+
+    This is the decompiler's reader: targets are widened to the two-byte
+    form and 8-byte operands padded to 16, so a listing reads the same for
+    every format. It drops what a listing does not need — the extra header
+    bytes, the flags byte, each instruction's tail byte. s2object.parse_bhav_rt
+    is the byte-exact reader an editor needs.
+    """
     if len(data) < 72:
         raise ValueError(f"BHAV data too short ({len(data)} bytes)")
 
     name = data[:64].split(b'\x00', 1)[0].decode('latin-1')
     ver, n_instr, bhav_type, argc, localc, _flags = struct.unpack_from("<HHBBBb", data, 64)
 
-    if ver not in (0x8007, 0x8009):
+    layout = BHAV_LAYOUTS.get(ver)
+    if layout is None:
         raise ValueError(f"Unsupported BHAV format version: 0x{ver:04X}")
-
-    # Both formats: opcode(H) true(H) false(H) ops(16B) tail(1B) = 23 bytes/instr.
-    # 0x8007 has a 4-byte extra header (instructions at 76); 0x8009 has a
-    # 5-byte extra header (instructions at 77) — verified empirically against
-    # Sim Blender.package, where offset 76 misaligns every 0x8009 instruction.
-    if ver == 0x8007:
-        instr_fmt, instr_size, ops_offset, instr_start = "<HHH", 23, 6, 76
-    else:
-        instr_fmt, instr_size, ops_offset, instr_start = "<HHH", 23, 6, 77
+    addr_fmt = "<HBB" if layout.addr_width == 1 else "<HHH"
+    ops_offset = 2 + 2 * layout.addr_width
+    instr_size = layout.instr_size
 
     instrs = []
-    pos = instr_start
+    pos = 72 + layout.extra_header
     for _ in range(n_instr):
         if pos + instr_size > len(data):
             break
-        opcode, true_d, false_d = struct.unpack_from(instr_fmt, data, pos)
-        operands = data[pos + ops_offset:pos + ops_offset + 16]
-        instrs.append(BhavInstruction(opcode, true_d, false_d, operands))
+        opcode, true_d, false_d = struct.unpack_from(addr_fmt, data, pos)
+        if layout.addr_width == 1:
+            true_d, false_d = widen_dest(true_d), widen_dest(false_d)
+        operands = data[pos + ops_offset:pos + ops_offset + layout.operand_len]
+        instrs.append(BhavInstruction(opcode, true_d, false_d,
+                                      operands + bytes(16 - len(operands))))
         pos += instr_size
 
     return Bhav(name, ver, bhav_type, argc, localc, instrs)

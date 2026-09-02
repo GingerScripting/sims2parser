@@ -140,12 +140,12 @@ for one URL, so every open is deferred by a beat.
 
 | File | Owns |
 |------|------|
-| `s2parser.py` | DBPF container, QFS/RefPack **de**compression *and* compression, BHAV decompiler. Everything else imports this. |
+| `s2parser.py` | DBPF container, QFS/RefPack **de**compression *and* compression, BHAV decompiler. Owns `BHAV_LAYOUTS`, the per-format instruction layout table (0x8000–0x8009), and reads every format into one widened shape. Everything else imports this. |
 | `s2neighborhood.py` | The JSON contract with the Swift app. SDSC, FAMI, LTXT, FAMt, SREL, CTSS → `sims.json`. Calls `s2ltw.annotate()` last, because the want evaluators read the relationships, ties, and businesses attached before it. |
 | `s2ngbh.py` | NGBH token store — business rank/loyalty, talent badges, `sim_memories()` |
 | `s2ltw.py` | Lifetime wants + per-want progress. A sim's LTW is the **first** record of their SWAF (`0xCD95548E`, one resource per sim, instance = sim nid). |
 | `s2luastate.py` | Per-sim Lua tables (`0x3053CF74`) — OFB perks, Pets behaviors |
-| `s2object.py` | Object resource parsers **and** builders (STR#, TTAB, OBJf, OBJD, BHAV assembler) |
+| `s2object.py` | Object resource parsers **and** builders (STR#, TTAB, OBJf, OBJD, BCON, GLOB, and the byte-exact BHAV pair `parse_bhav_rt`/`build_bhav` plus `bhav_convert`), the from-scratch BHAV assembler, and `BHAV_OPERAND_LAYOUTS` for the editor |
 | `s2clone.py` | The SimPE "Object Workshop" step — clone an object to a new identity, rewriting every reference so it coexists with its donor |
 | `s2texture.py` | TXTR/LIFO → PNG. Owns the **generic RCOL reader**, which `s2mesh.py` reuses. |
 | `s2mesh.py` | GMDC (`cGeometryDataContainer`) → Wavefront OBJ. Partial. |
@@ -174,6 +174,12 @@ These have each cost real debugging time and are easy to reintroduce:
   trusts both directions draws people twice.
 - **CTSS entries are (language, value, description) triples.** Parse all three
   or in-game-born sims lose their last names.
+- **BHAV formats differ in width, not just header.** 0x8000–0x8006 have
+  one-byte branch targets (sentinels 0xFD/0xFE/0xFF) and 0x8000–0x8002 only 8
+  operand bytes; the game's own objects.package is mostly these. The editable
+  model widens everything to the 0x8007 shape, so `s2package`'s instruction
+  ops and the app treat every tree the same; `build_bhav` refuses an edit the
+  original format cannot hold and `bhav_convert` lifts the tree to 0x8007.
 - **Group `0xFFFFFFFF` is a per-package private namespace; `0x7FD46CD0` is
   global.** Both type and group are needed for real conflict detection.
 - **OFB ownership is recorded in two places.** LTXT gives the complete owner
