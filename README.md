@@ -8,6 +8,12 @@ DBPF `.package` format underneath it.
 Built for the Aspyr **Super Collection** on macOS. Strictly **read-only**: the
 app never writes a single byte to your saves.
 
+Alongside it, **Sim Studio** is a SimPE-style package *editor* — open any
+`.package`, browse its resources, edit the ones the toolkit understands, clone
+objects, and save — that keeps the same promise: a neighborhood save opens
+read-only and can only be copied out, never written back. See
+[Sim Studio](#sim-studio) below.
+
 ![Sim Browser main window](docs/browser.png)
 
 ## The app
@@ -172,13 +178,46 @@ per member. Any sim mentioned by name in an entry gets a **Journal** section on
 their detail page linking back to every season they appear in: write hood-wide,
 read per-sim.
 
+## Sim Studio
+
+**Sim Studio** opens a `.package` into a three-pane window — a type tree, a
+sortable resource table, and a detail pane — and edits it the way SimPE does,
+with the whole file-format side living in Python:
+
+- **Decoded editors** for every type the toolkit round-trips byte for byte:
+  STR#/TTAs/CTSS string tables, OBJD (named fields and GUIDs), BCON, GLOB,
+  OBJf, TTAB, and **BHAV** — the instruction table with an operand form for the
+  primitives whose layout is pinned, branch-target menus, insert/delete/move
+  with automatic renumbering, and a one-click convert for the older base-game
+  formats. Anything else shows as hex and passes through a save untouched.
+- **Object Workshop** — clone an object in place (new GUID derived from the
+  name, catalog text, price), see exactly which BHAV GUID literals were patched
+  and which were deliberately left alone, and check Downloads for GUID
+  collisions before saving.
+- **Package tools** — merge another package in, split a selection out,
+  per-resource compression, add/rename/delete, export and import raw bytes,
+  and the doctor's Downloads scan in a window.
+- **Previews** — textures decoded to PNG (with export) and meshes in a
+  SceneKit view, as far as the partial GMDC reader goes.
+- **Sims mode** for a neighborhood package — every sim's profile (age,
+  aspiration, career, personality, skills, interests…), relationships, and
+  memories, editable with undo. The package itself stays read-only; **Copy
+  Hood** writes a complete copy of the neighborhood folder elsewhere with the
+  edits applied.
+
+Undo, redo, Save, and Save As all go through a per-window Python process
+(`s2studio.py`); the Swift side never holds a package's bytes. Files under the
+game's `Neighborhoods` folder or inside the game install open read-only, and
+the daemon refuses to write there whatever the UI asks.
+
 ## Install & run
 
 ```sh
 git clone https://github.com/GingerScripting/sims2parser.git
 cd sims2parser
-./SimBrowser/make_app.sh     # builds "Sim Browser.app" in the repo root
+./SimBrowser/make_app.sh     # builds "Sim Browser.app" and "Sim Studio.app" in the repo root
 open "Sim Browser.app"
+open "Sim Studio.app"        # or double-click any .package
 ```
 
 Requirements: macOS 13+, Xcode command-line tools (for `swift build`),
@@ -206,14 +245,18 @@ re-reads them any time. Data is cached in
 ## How it works
 
 ```
-Sims 2 saves ──▶ s2parser.py ──▶ s2neighborhood.py ──▶ sims.json ──▶ SwiftUI app
-(DBPF/QFS)       (container)     (SDSC, FAMI, LTXT,     (cache)      (SimBrowser/)
+Sims 2 saves ──▶ s2parser.py ──▶ s2neighborhood.py ──▶ sims.json ──▶ Sim Browser
+(DBPF/QFS)       (container)     (SDSC, FAMI, LTXT,     (cache)      (SwiftUI)
                                   FAMt, SREL, CTSS)
+
+.package ◀──▶ s2studio.py ◀── JSON-RPC over stdin/stdout ──▶ Sim Studio
+              (bytes, decoding, undo, the read-only rule)     (SwiftUI, views only)
 ```
 
-All file-format work happens in Python; the Swift app only ever reads the
-extracted JSON. That split keeps the save-file logic in one place (and keeps
-the app trivially incapable of corrupting a save).
+All file-format work happens in Python; the Swift apps only ever see JSON —
+Sim Browser reads the extracted file, Sim Studio talks to a daemon that holds
+the package. That split keeps the save-file logic in one place (and keeps the
+apps trivially incapable of corrupting a save).
 
 | File | What it does |
 |------|--------------|
@@ -227,7 +270,10 @@ the app trivially incapable of corrupting a save).
 | `s2doctor.py` | Freeze/glitch diagnostic — reads the game's own error logs, scans Downloads for damaged packages and overlapping overrides, and cross-references the two. `python3 s2doctor.py` |
 | `careers.json` | Career/major GUID → name and per-level job titles, harvested from the game's own `objects.package` files (base + every EP) |
 | `s2writer.py` | DBPF *writer* — emits v1.1 / index 7.2 packages, stored or QFS-compressed with a matching DIR, plus `read_all_resources()` for read-modify-write editing |
-| `s2object.py` | Object resource **parsers and builders** — STR#/TTAs/CTSS, TTAB (v0x4F and v0x54), OBJf, OBJD, and a BHAV assembler. Every parser round-trips byte-for-byte against the donors in `sample-packages/`: `python3 s2object.py` |
+| `s2object.py` | Object resource **parsers and builders** — STR#/TTAs/CTSS, TTAB (v0x4F and v0x54), OBJf, OBJD, BCON, GLOB, and BHAV in every format from 0x8000 to 0x8009, plus a BHAV assembler. Every parser round-trips byte-for-byte against the donors in `sample-packages/` and the game's own `objects.package`: `python3 s2object.py` |
+| `s2studio.py` | The **Sim Studio daemon**: one JSON-RPC session per open package over stdin/stdout — index, decode, edit, undo, save, clone, merge, split, previews, sim editing — and the read-only rule for saves and the game install. `python3 s2studio.py --check PATH` says whether a path would open read-only |
+| `s2package.py` | The in-memory package model the daemon edits, including `LazyResource`, which keeps a compressed resource packed until it is looked at (so `objects.package` opens in a quarter second) |
+| `s2tools.py` | Merge one package into another, split a selection out. `python3 s2tools.py merge a.package b.package --out c.package` |
 | `s2clone.py` | **Object cloning** — the SimPE Object Workshop step. Gives a donor object a new GUID and rewrites every reference that pointed at the old one, including GUID literals buried in BHAV operands. `python3 s2clone.py donor.package new.package --name "My Thing"` |
 | `s2texture.py` | **Textures** — reads TXTR/LIFO (RCOL scenegraph resources), decodes DXT1/DXT3/DXT5 and the raw formats, and exports PNG with no third-party dependency. `python3 s2texture.py pkg.package --export out/` |
 | `SimBrowser/` | The SwiftUI app ([its own README](SimBrowser/README.md)) |

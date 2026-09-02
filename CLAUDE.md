@@ -30,6 +30,13 @@ editable resource type means a parse/build pair in `s2object.py` registered
 in `PARSERS`, and the daemon serves it with no Swift change beyond a form.
 Never parse game bytes in Swift.
 
+Sim Studio edits neighborhoods the same way: a `*_Neighborhood.package`
+opens read-only, its Sims mode edits SDSC/SREL/NGBH through the ordinary
+undo stack, and **Copy Hood** (`hood_save_as`) copies the whole hood folder
+somewhere outside `Neighborhoods` and writes the edited package into the
+copy. The game's container is not readable from a plain shell (TCC), so the
+tests use the `s2savediff.py` snapshots under `~/Documents/sims2-savediff/`.
+
 Sim Studio's read-only rule is enforced in the daemon, not the UI:
 `s2studio.protection_reason()` refuses `save` on anything under a
 `Neighborhoods` folder or inside the game's own install, and refuses
@@ -141,8 +148,8 @@ for one URL, so every open is deferred by a beat.
 | File | Owns |
 |------|------|
 | `s2parser.py` | DBPF container, QFS/RefPack **de**compression *and* compression, BHAV decompiler. Owns `BHAV_LAYOUTS`, the per-format instruction layout table (0x8000–0x8009), and reads every format into one widened shape. Everything else imports this. |
-| `s2neighborhood.py` | The JSON contract with the Swift app. SDSC, FAMI, LTXT, FAMt, SREL, CTSS → `sims.json`. Calls `s2ltw.annotate()` last, because the want evaluators read the relationships, ties, and businesses attached before it. |
-| `s2ngbh.py` | NGBH token store — business rank/loyalty, talent badges, `sim_memories()` |
+| `s2neighborhood.py` | The JSON contract with the Swift app. SDSC, FAMI, LTXT, FAMt, SREL, CTSS → `sims.json`. Calls `s2ltw.annotate()` last, because the want evaluators read the relationships, ties, and businesses attached before it. Also the editor's view of SDSC and SREL: `SDSC_FIELDS`/`SREL_FIELDS` name the offsets the reader uses, and `build_sdsc`/`build_srel` write only those over a copy of the original record (`--selftest HOOD_DIR` proves the pair on every record). |
+| `s2ngbh.py` | NGBH token store — business rank/loyalty, talent badges, `sim_memories()`. `parse_ngbh_rt`/`build_ngbh_rt` are the byte-exact pair the editor uses (both token lists per group, the unread header bytes, the rare trailing word); a store the reader has to resync past is refused rather than rebuilt with a hole. |
 | `s2ltw.py` | Lifetime wants + per-want progress. A sim's LTW is the **first** record of their SWAF (`0xCD95548E`, one resource per sim, instance = sim nid). |
 | `s2luastate.py` | Per-sim Lua tables (`0x3053CF74`) — OFB perks, Pets behaviors |
 | `s2object.py` | Object resource parsers **and** builders (STR#, TTAB, OBJf, OBJD, BCON, GLOB, and the byte-exact BHAV pair `parse_bhav_rt`/`build_bhav` plus `bhav_convert`), the from-scratch BHAV assembler, and `BHAV_OPERAND_LAYOUTS` for the editor |
