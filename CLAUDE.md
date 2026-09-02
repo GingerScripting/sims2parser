@@ -146,11 +146,12 @@ for one URL, so every open is deferred by a beat.
 | `s2ltw.py` | Lifetime wants + per-want progress. A sim's LTW is the **first** record of their SWAF (`0xCD95548E`, one resource per sim, instance = sim nid). |
 | `s2luastate.py` | Per-sim Lua tables (`0x3053CF74`) — OFB perks, Pets behaviors |
 | `s2object.py` | Object resource parsers **and** builders (STR#, TTAB, OBJf, OBJD, BCON, GLOB, and the byte-exact BHAV pair `parse_bhav_rt`/`build_bhav` plus `bhav_convert`), the from-scratch BHAV assembler, and `BHAV_OPERAND_LAYOUTS` for the editor |
-| `s2clone.py` | The SimPE "Object Workshop" step — clone an object to a new identity, rewriting every reference so it coexists with its donor |
+| `s2clone.py` | The SimPE "Object Workshop" step — clone an object to a new identity, rewriting every reference so it coexists with its donor. Sim Studio's Tools ▸ Clone Object runs it in place as one undo step. |
 | `s2texture.py` | TXTR/LIFO → PNG. Owns the **generic RCOL reader**, which `s2mesh.py` reuses. |
 | `s2mesh.py` | GMDC (`cGeometryDataContainer`) → Wavefront OBJ. Partial. |
 | `s2writer.py` | DBPF writer (uncompressed or QFS-compressed with a DIR, whole-package or per-TGI via `compress_tgis`) + `read_all_resources()`. Writes a still-packed `LazyResource` as-is. |
 | `s2studio.py` | The Sim Studio daemon: JSON-RPC over stdio, one session per open package, undo stack, the read-only policy (`protection_reason`), decoded↔JSON conversion (`to_json`/`from_json`, with `$type`, `$hex`, `$props`). |
+| `s2tools.py` | Merge one package's resources into another and split a selection out — pure list operations plus a small CLI. |
 | `s2package.py` | Pure in-memory package operations the daemon and its undo stack share, and `LazyResource` — a compressed resource that inflates on first access so objects.package opens in a quarter second. |
 | `s2savediff.py` | Save snapshot/diff — the discovery tool for unknown formats |
 | `s2doctor.py` | Reads the game's own error logs; scans Downloads for conflicts |

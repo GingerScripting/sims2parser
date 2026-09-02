@@ -172,7 +172,21 @@ def copy(res: Resource) -> Resource:
         c = LazyResource(res.type_id, res.group_id, res.instance_id, res.packed, res.instance_hi)
         c._plain = res._plain
         return c
-    return Resource(res.type_id, res.group_id, res.instance_id, bytes(res.data), res.instance_hi)
+    # The same bytes object on purpose: `same_bytes` can then tell an
+    # untouched resource from a reassigned one by identity, without a compare.
+    return Resource(res.type_id, res.group_id, res.instance_id, res.data, res.instance_hi)
+
+
+def same_bytes(a: Resource, b: Resource) -> bool:
+    """Whether two resources hold the same payload, inflating nothing that
+    is still packed. Used to find what an in-place operation like a clone
+    actually changed, across a 50,000-resource package."""
+    if isinstance(a, LazyResource) and isinstance(b, LazyResource):
+        if a.packed is not None and b.packed is not None:
+            return a.packed is b.packed or a.packed == b.packed
+    if isinstance(a, LazyResource) and a.packed is not None and not isinstance(b, LazyResource):
+        return False
+    return a.data is b.data or a.data == b.data
 
 
 # ---- BHAV instruction editing -------------------------------------------------
