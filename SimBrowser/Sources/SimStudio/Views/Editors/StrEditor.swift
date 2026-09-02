@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// STR# / TTAs / CTSS: a language-tagged string table.
 struct StrEditor: View {

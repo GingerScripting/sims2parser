@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// A small hex/decimal entry field for u32 ids. Shows hex, accepts either.
 struct IdField: View {

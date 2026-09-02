@@ -1,24 +1,24 @@
 import Foundation
 
 /// The daemon's error object, as it comes over the wire.
-struct RPCErrorBody: Decodable {
-    let code: String
-    let message: String
-    let data: JSONValue?
+public struct RPCErrorBody: Decodable {
+    public let code: String
+    public let message: String
+    public let data: JSONValue?
 }
 
-enum RPCFailure: Error, LocalizedError {
+public enum RPCFailure: Error, LocalizedError {
     case remote(RPCErrorBody)
     case transport(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .remote(let e): return e.message
         case .transport(let s): return s
         }
     }
 
-    var code: String {
+    public var code: String {
         switch self {
         case .remote(let e): return e.code
         case .transport: return "transport"
@@ -31,7 +31,7 @@ enum RPCFailure: Error, LocalizedError {
 /// server events (no id) go to `onEvent`. Every response line is handed
 /// back as raw `Data` and decoded by the typed caller, so the reader never
 /// has to know what a method returns.
-final class JSONRPCClient: @unchecked Sendable {   // all mutable state is confined to `queue`
+public final class JSONRPCClient: @unchecked Sendable {   // all mutable state is confined to `queue`
     private let process = Process()
     private let inPipe = Pipe()
     private let outPipe = Pipe()
@@ -39,17 +39,18 @@ final class JSONRPCClient: @unchecked Sendable {   // all mutable state is confi
     private let queue = DispatchQueue(label: "org.macadmins.simstudio.rpc")
     private var buffer = Data()
     private var nextID = 0
+    private let idLock = NSLock()
     private var pending: [Int: (Result<Data, Error>) -> Void] = [:]
     private var closed = false
 
     /// The last few KB of the daemon's stderr, for error messages.
-    private(set) var stderrTail = ""
-    var onEvent: ((JSONValue) -> Void)?
+    public private(set) var stderrTail = ""
+    public var onEvent: ((JSONValue) -> Void)?
 
-    let python: String
-    let script: String
+    public let python: String
+    public let script: String
 
-    init(python: String, script: String) throws {
+    public init(python: String, script: String) throws {
         self.python = python
         self.script = script
         process.executableURL = URL(fileURLWithPath: python)
@@ -134,11 +135,11 @@ final class JSONRPCClient: @unchecked Sendable {   // all mutable state is confi
     /// `SIMSTUDIO_TRACE=1` in the environment logs every call to stderr, the
     /// way GeometryProbe logs layout in Sim Browser — for driving the app from
     /// a shell where its window cannot be seen.
-    static let tracing = ProcessInfo.processInfo.environment["SIMSTUDIO_TRACE"] != nil
+    public static let tracing = ProcessInfo.processInfo.environment["SIMSTUDIO_TRACE"] != nil
 
     /// Send one request and decode its result. `timeout` is generous because
     /// a first BHAV lookup on objects.package inflates thousands of trees.
-    func call<T: Decodable>(_ method: String, _ params: [String: JSONValue] = [:],
+    public func call<T: Decodable>(_ method: String, _ params: [String: JSONValue] = [:],
                             as type: T.Type = T.self, timeout: TimeInterval = 120) async throws -> T {
         let data = try await send(method, params, timeout: timeout)
         let env: Envelope<T>
@@ -160,7 +161,7 @@ final class JSONRPCClient: @unchecked Sendable {   // all mutable state is confi
     /// Like `call`, but hands back the result as Foundation objects from
     /// JSONSerialization, which parses a multi-megabyte reply in tens of
     /// milliseconds where JSONDecoder takes seconds. For the index.
-    func callRaw(_ method: String, _ params: [String: JSONValue] = [:],
+    public func callRaw(_ method: String, _ params: [String: JSONValue] = [:],
                  timeout: TimeInterval = 120) async throws -> Any {
         let data = try await send(method, params, timeout: timeout)
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -185,35 +186,49 @@ final class JSONRPCClient: @unchecked Sendable {   // all mutable state is confi
                                                            Date().timeIntervalSince(started) * 1000).utf8))
             }
         }
-        return try await withCheckedThrowingContinuation { cont in
-            queue.async {
-                if self.closed {
-                    cont.resume(throwing: RPCFailure.transport("daemon is not running"))
-                    return
-                }
-                self.nextID += 1
-                let id = self.nextID
-                self.pending[id] = { cont.resume(with: $0) }
-                do {
-                    var line = try JSONEncoder().encode(Request(id: id, method: method, params: params))
-                    line.append(0x0A)
-                    try self.inPipe.fileHandleForWriting.write(contentsOf: line)
-                } catch {
-                    self.pending[id] = nil
-                    cont.resume(throwing: RPCFailure.transport("could not write to daemon: \(error.localizedDescription)"))
-                    return
-                }
-                self.queue.asyncAfter(deadline: .now() + timeout) {
-                    if let cb = self.pending.removeValue(forKey: id) {
-                        cb(.failure(RPCFailure.transport("\(method) timed out after \(Int(timeout))s")))
+        // Honour task cancellation: a SwiftUI `.task(id:)` that moves on
+        // (a new selection, a new preview) cancels the old load, and the
+        // stale reply must throw rather than land in the view. The daemon
+        // still answers; the answer is dropped here.
+        try Task.checkCancellation()
+        let id: Int = idLock.withLock { nextID += 1; return nextID }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { cont in
+                queue.async {
+                    if self.closed {
+                        cont.resume(throwing: RPCFailure.transport("daemon is not running"))
+                        return
+                    }
+                    if Task.isCancelled {
+                        cont.resume(throwing: CancellationError())
+                        return
+                    }
+                    self.pending[id] = { cont.resume(with: $0) }
+                    do {
+                        var line = try JSONEncoder().encode(Request(id: id, method: method, params: params))
+                        line.append(0x0A)
+                        try self.inPipe.fileHandleForWriting.write(contentsOf: line)
+                    } catch {
+                        self.pending[id] = nil
+                        cont.resume(throwing: RPCFailure.transport("could not write to daemon: \(error.localizedDescription)"))
+                        return
+                    }
+                    self.queue.asyncAfter(deadline: .now() + timeout) {
+                        if let cb = self.pending.removeValue(forKey: id) {
+                            cb(.failure(RPCFailure.transport("\(method) timed out after \(Int(timeout))s")))
+                        }
                     }
                 }
+            }
+        } onCancel: {
+            queue.async {
+                if let cb = self.pending.removeValue(forKey: id) { cb(.failure(CancellationError())) }
             }
         }
     }
 
     /// Ask the daemon to exit, then make sure it does.
-    func shutdown() {
+    public func shutdown() {
         queue.async {
             guard !self.closed else { return }
             let line = Data("{\"id\": 0, \"method\": \"shutdown\", \"params\": {}}\n".utf8)

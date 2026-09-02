@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 import AppKit
 
 /// The middle column: one row per resource in the current filter. Selection
@@ -107,8 +108,4 @@ struct ResourceTable: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
-}
-
-extension TGI: Identifiable {
-    var id: TGI { self }
 }

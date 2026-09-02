@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// BHAV: the header, the instruction list, and an operand editor for the
 /// selected instruction. Structural edits (insert, delete, move) go through

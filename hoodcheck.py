@@ -66,6 +66,49 @@ class Report:
     def healthy(self) -> bool:
         return not self.error and self.declared == self.actual and len(self.trailing) <= 8
 
+    @property
+    def chunk_aligned(self) -> bool:
+        """Whether the store ends exactly on a serialisation-buffer boundary.
+
+        A truncated store is always an exact multiple of CHUNK: the game
+        serialises into a buffer that grows in CHUNK steps, and a failed
+        write keeps only the whole chunks. Healthy stores end anywhere.
+        It is the *uncompressed* size that aligns. Three truncations
+        observed at 244, 244 and 245 chunks; three healthy stores unaligned.
+        """
+        return bool(self.ngbh_size) and self.ngbh_size % CHUNK == 0
+
+    def verdict(self) -> str:
+        """One reading of the report, in prose — what the CLI prints after
+        the counts and what Sim Studio shows in its banner, so the two can
+        never disagree about what the numbers mean."""
+        if self.error:
+            return f"Token store could not be checked: {self.error}."
+        if self.healthy:
+            return f"Token store is intact: {self.actual} sim groups for {self.sdsc_count} sims."
+        parts = []
+        gap = self.declared - self.actual
+        if gap > 0:
+            parts.append(f"declares {self.declared} sim token groups but holds only "
+                         f"{self.actual}, so the game walks past the end of the buffer "
+                         f"and never finishes loading")
+        elif gap < 0:
+            parts.append(f"declares {self.declared} sim token groups but holds {self.actual}")
+        if len(self.trailing) > 8:
+            parts.append(f"ends in a partially written group with no terminator "
+                         f"({len(self.trailing)} bytes)")
+        if self.chunk_aligned:
+            parts.append(f"is exactly {self.ngbh_size // CHUNK} x {CHUNK // 1024} KB, "
+                         f"the hallmark of a lost final buffer chunk")
+        if self.missing_nids:
+            shown = ", ".join(str(n) for n in self.missing_nids[:8])
+            more = " …" if len(self.missing_nids) > 8 else ""
+            parts.append(f"sims without a token group: {shown}{more}")
+        text = "Token store " + "; ".join(parts) + "."
+        if gap > 0:
+            text += " hoodcheck.py --repair writes a padded copy."
+        return text
+
 
 def walk_groups(d: bytes) -> "list[tuple[int, int, int]]":
     """[(group id, start offset, end offset), …].
@@ -112,29 +155,37 @@ def inspect(target: Path) -> "Report | None":
             return None
     else:
         pkg = target
-    rep = Report(hood=pkg.stem.replace("_Neighborhood", ""), package=pkg)
+    hood = pkg.stem.replace("_Neighborhood", "")
     try:
         header, entries = s2parser.open_package(pkg)
     except Exception as exc:
-        rep.error = f"package unreadable: {exc}"
-        return rep
+        return Report(hood=hood, package=pkg, error=f"package unreadable: {exc}")
 
     ngbh = [e for e in entries if e.type_id == s2ngbh.TID_NGBH]
     if not ngbh:
-        rep.error = "no NGBH resource"
-        return rep
-    rep.ngbh_entry = ngbh[0]
-    rep.sdsc_count = sum(1 for e in entries if e.type_id == SDSC)
-
+        return Report(hood=hood, package=pkg, error="no NGBH resource")
     with open(pkg, "rb") as f:
         try:
-            rep.data = s2parser.read_resource(f, rep.ngbh_entry)
+            data = s2parser.read_resource(f, ngbh[0])
         except Exception as exc:
-            rep.error = f"NGBH unreadable: {exc}"
-            return rep
+            return Report(hood=hood, package=pkg, error=f"NGBH unreadable: {exc}")
+    rep = inspect_bytes(data, [e.instance for e in entries if e.type_id == SDSC],
+                        hood=hood, package=pkg)
+    rep.ngbh_entry = ngbh[0]
+    return rep
 
-    d = rep.data
-    rep.ngbh_size = len(d)
+
+def inspect_bytes(data: bytes, sdsc_nids: "list[int]", *, hood: str = "",
+                  package: "Path | None" = None) -> Report:
+    """Check a token store already in memory. `sdsc_nids` are the sim ids
+    the package holds SDSC records for, so a missing group can be named.
+
+    This is the form Sim Studio runs, on the store it is about to write,
+    so the verdict describes the edited bytes rather than the file on disk.
+    """
+    rep = Report(hood=hood, package=package or Path(""), data=data,
+                 sdsc_count=len(sdsc_nids), ngbh_size=len(data))
+    d = data
     rep.groups = walk_groups(d)
     if not rep.groups:
         rep.error = "no token groups found"
@@ -159,8 +210,7 @@ def inspect(target: Path) -> "Report | None":
     rep.trailing = d[rep.last_end:]
 
     present = {g[0] for g in sims}
-    with open(pkg, "rb") as f:
-        nids = sorted(e.instance for e in entries if e.type_id == SDSC)
+    nids = sorted(sdsc_nids)
     rep.missing_nids = [n for n in nids if n not in present][: max(0, rep.declared - rep.actual)]
     return rep
 
@@ -227,7 +277,7 @@ def describe(rep: Report) -> None:
     # stores unaligned. An earlier reading of this as 32 KB came from two
     # samples that were both 244 x 8192, and 244 divides by 4.
     over = rep.ngbh_size % CHUNK
-    if rep.ngbh_size and over == 0:
+    if rep.chunk_aligned:
         print(f"        NGBH is exactly {rep.ngbh_size // CHUNK} x 8 KB — "
               f"the hallmark of a lost final buffer chunk")
     elif rep.healthy and over and over < 1024:

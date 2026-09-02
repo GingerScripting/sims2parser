@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// TTAB: the pie-menu interaction table. Each entry is an opaque block of
 /// bytes with three fields the parser has pinned — action tree, guard tree,

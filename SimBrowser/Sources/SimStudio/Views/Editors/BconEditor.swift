@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// BCON: up to 255 u16 tuning constants and a flag byte.
 struct BconEditor: View {

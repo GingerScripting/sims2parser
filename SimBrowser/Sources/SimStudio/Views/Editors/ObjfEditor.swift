@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// OBJf: the object's function table — (guard, action) tree ids per slot.
 struct ObjfEditor: View {

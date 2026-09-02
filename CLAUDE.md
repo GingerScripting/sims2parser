@@ -52,11 +52,21 @@ ARCHS=native ./SimBrowser/make_app.sh # this machine only — much quicker while
 APPS=SimStudio ARCHS=native ./SimBrowser/make_app.sh   # just one app
 cd SimBrowser && swift run SimBrowser # run an app from source, no bundle (or SimStudio)
 cd SimBrowser && swift build          # compile check for SimKit + both apps
+cd SimBrowser && swift run SimStudioDrive   # drives PackageSession through the daemon on a scratch donor
 ```
 
 Sim Studio can be driven headless when its window can't be seen:
-`SIMSTUDIO_TRACE=1` logs every RPC to stderr and `SIMSTUDIO_OPEN=<file>`
-opens that package at launch.
+`SIMSTUDIO_TRACE=1` logs every RPC and detail load to stderr and
+`SIMSTUDIO_OPEN=<file>` opens that package at launch. The editing flow
+itself is covered by `cd SimBrowser && swift run SimStudioDrive`, a separate
+executable that drives `PackageSession` — the layer every editor button
+calls — against a scratch copy of a donor through the real daemon (select a
+STR#, edit, apply, undo/redo, add/rename/compress/delete, save, re-open, BHAV
+insert/apply/undo) and exits 0 or 1. It is not a test target because XCTest
+and Swift Testing both need Xcode and the README asks only for the Command
+Line Tools. It found the detail-pane decode bug and a stale-refresh race that
+the Python smoke test could not see, but it is not a substitute for clicking
+through the views. It skips when `sample-packages/` is absent.
 
 ```sh
 python3 s2neighborhood.py --hood N002 --out /tmp/sims.json   # extract one hood
@@ -132,13 +142,14 @@ guides. Don't commit them.
 
 ## Sim Studio layout
 
-`SimBrowser/Package.swift` builds three targets: `SimKit` (shared:
-`IsolatedPane`, `FlowLayout`, `SectionCard`, `PythonLocator`), `SimBrowser`,
-and `SimStudio`. Sim Studio is `Sources/SimStudio/`: `Bridge/` (the RPC
-client, `JSONValue`, the Codable mirrors of the daemon's replies),
-`Session/PackageSession.swift` (one open package, `@MainActor`), and
-`Views/` (three-pane window, type tree, resource `Table`, detail pane with
-Decoded/Tree/Hex tabs, one editor per decodable type under `Editors/`). It is
+`SimBrowser/Package.swift` builds five targets: `SimKit` (shared:
+`IsolatedPane`, `FlowLayout`, `SectionCard`, `Banner`, `PythonLocator`),
+`SimBrowser`, `SimStudioCore` (the RPC client, `JSONValue`, the Codable
+mirrors of the daemon's replies, and `PackageSession` — one open package,
+`@MainActor` — all `public`), `SimStudio` (the views only: three-pane window,
+type tree, resource `Table`, detail pane with Decoded/Tree/Preview/Hex tabs,
+one editor per decodable type under `Views/Editors/`), and `SimStudioDrive`
+(the headless editing-flow check). It is
 deliberately **not** a document-based app: `FileDocument` would hand Swift
 the bytes. Each package is a `WindowGroup(for: URL.self)` window owning one
 daemon process. Calling `openWindow` inside the first `onAppear` or the
@@ -162,6 +173,7 @@ for one URL, so every open is deferred by a beat.
 | `s2studio.py` | The Sim Studio daemon: JSON-RPC over stdio, one session per open package, undo stack, the read-only policy (`protection_reason`), decoded↔JSON conversion (`to_json`/`from_json`, with `$type`, `$hex`, `$props`). |
 | `s2tools.py` | Merge one package's resources into another and split a selection out — pure list operations plus a small CLI. |
 | `s2package.py` | Pure in-memory package operations the daemon and its undo stack share, and `LazyResource` — a compressed resource that inflates on first access so objects.package opens in a quarter second. |
+| `hoodcheck.py` | Detects a truncated NGBH token store (declared vs actual sim groups, 8 KB chunk alignment) and writes a padded or trimmed **copy**. `inspect_bytes` is the in-memory form the daemon runs on every hood open and edit; `Report.verdict()` is the one wording both the CLI and the app show. |
 | `s2savediff.py` | Save snapshot/diff — the discovery tool for unknown formats |
 | `s2doctor.py` | Reads the game's own error logs; scans Downloads for conflicts |
 | `make_wants.py` | Regenerates `wants.json` (want GUID → definition) from the game's own `Wants.package` |

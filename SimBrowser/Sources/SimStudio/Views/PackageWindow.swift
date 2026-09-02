@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 import AppKit
 import SimKit
 
@@ -93,7 +94,17 @@ struct PackageWindow: View {
 
     private var content: some View {
         VStack(spacing: 0) {
-            if session.isReadonly { readonlyBanner }
+            if session.isReadonly {
+                Banner("Read-only: \(session.summary?.readonlyReason ?? ""). Edits stay in memory; use "
+                       + (session.isHood ? "Copy Hood to write a copy of the whole neighborhood elsewhere."
+                                         : "Save As to write a copy elsewhere."),
+                       systemImage: "lock.fill", tint: .yellow)
+            }
+            if let check = session.hoodMeta?.check, !check.healthy {
+                // Shown in both modes: a hood that will not load is the one
+                // thing to know before browsing it.
+                Banner(check.summary, systemImage: "exclamationmark.triangle.fill", tint: .red)
+            }
             // Deliberately an HStack, not NavigationSplitView — see Sim
             // Browser's ContentView for the macOS 26 measurement behind that.
             if mode == .sims && session.isHood {
@@ -164,19 +175,6 @@ struct PackageWindow: View {
             }
         }
         .searchable(text: $search, placement: .toolbar, prompt: "Filter by group, instance, or type")
-    }
-
-    private var readonlyBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "lock.fill")
-            Text("Read-only: \(session.summary?.readonlyReason ?? ""). Edits stay in memory; use "
-                 + (session.isHood ? "Copy Hood to write a copy of the whole neighborhood elsewhere." : "Save As to write a copy elsewhere."))
-                .font(.callout)
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color.yellow.opacity(0.18))
     }
 
     private var statusBar: some View {

@@ -1,4 +1,5 @@
 import SwiftUI
+import SimStudioCore
 
 /// Decimal integer entry.
 struct NumberField: View {

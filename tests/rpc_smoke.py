@@ -130,6 +130,7 @@ def main() -> int:
             assert index["type_names"][str(row["type"])] == "STR#"
 
             got = c.call("get_resource", tgi=tgi)
+            assert got["row"]["instance"] == row["instance"] and got["row"]["decodable"]
             assert got["decoded"] and got["decode_error"] is None, got
             assert got["decoded"]["$type"] == "StrResource"
             assert bytes.fromhex(got["hex"]) == \
@@ -227,7 +228,7 @@ def main() -> int:
                 btgi = {"type": brow["type"], "group": brow["group"],
                         "instance": brow["instance"], "instance_hi": brow["instance_hi"]}
                 got = c.call("get_resource", tgi=btgi)
-                assert got["decoded"]["$type"] == "BhavRes" and got["bhav"].get("tree"), got["bhav"]
+                assert got["decoded"]["$type"] == "BhavRes" and got["bhav_render"].get("tree"), got["bhav_render"]
                 bmeta = c.call("bhav_meta")
                 assert "2" in bmeta["layouts"] and bmeta["sentinels"]["true"] == 0xFFFD
                 n = len(got["decoded"]["instructions"])
@@ -242,7 +243,7 @@ def main() -> int:
                 r = c.call("put_resource", tgi=btgi, decoded=edited)
                 assert r["changed"]
                 back = c.call("get_resource", tgi=btgi)
-                assert back["decoded"]["name"] == "Sim Studio tree" and "Sim Studio tree" in back["bhav"]["flat"]
+                assert back["decoded"]["name"] == "Sim Studio tree" and "Sim Studio tree" in back["bhav_render"]["flat"]
                 c.call("undo")
                 print(f"BHAV {got['decoded']['name']!r}: {n} instructions, "
                       f"format 0x{got['decoded']['format_version']:04X}; transform/apply/undo OK")
@@ -318,8 +319,8 @@ def hood_smoke() -> None:
             assert meta["is_hood"] and meta["sdsc_fields"] and meta["sdsc_tables"]["career"]
             check = meta["check"]
             assert check is not None and "healthy" in check and check["sdsc_count"] > 0, check
-            print(f"hoodcheck: {'healthy' if check['healthy'] else 'DAMAGED'} "
-                  f"(declared {check['declared']}, actual {check['actual']}, {check['sdsc_count']} SDSC)")
+            assert check["summary"].startswith("Token store"), check["summary"]
+            print(f"hoodcheck: {check['summary']}")
             sims = c.call("hood_sims")["sims"]
             assert sims, "no sims"
             named = [s for s in sims if s["first"] and s["last"]]
