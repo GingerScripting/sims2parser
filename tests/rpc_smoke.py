@@ -316,6 +316,10 @@ def hood_smoke() -> None:
             info = c.call("open", path=str(hood))
             meta = c.call("hood_meta")
             assert meta["is_hood"] and meta["sdsc_fields"] and meta["sdsc_tables"]["career"]
+            check = meta["check"]
+            assert check is not None and "healthy" in check and check["sdsc_count"] > 0, check
+            print(f"hoodcheck: {'healthy' if check['healthy'] else 'DAMAGED'} "
+                  f"(declared {check['declared']}, actual {check['actual']}, {check['sdsc_count']} SDSC)")
             sims = c.call("hood_sims")["sims"]
             assert sims, "no sims"
             named = [s for s in sims if s["first"] and s["last"]]

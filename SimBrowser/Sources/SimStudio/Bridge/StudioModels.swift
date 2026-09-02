@@ -501,9 +501,37 @@ struct FieldDef: Decodable, Identifiable {
     }
 }
 
+/// hoodcheck's verdict on the neighborhood's token store.
+struct HoodCheck: Decodable {
+    let healthy: Bool
+    let error: String
+    let declared: Int
+    let actual: Int
+    let sdscCount: Int
+    let missingNids: [Int]
+    let trailing: Int
+    let chunkAligned: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case healthy, error, declared, actual, trailing
+        case sdscCount = "sdsc_count"
+        case missingNids = "missing_nids"
+        case chunkAligned = "chunk_aligned"
+    }
+
+    var summary: String {
+        if !error.isEmpty { return "Token store could not be checked: \(error)" }
+        var s = "Token store declares \(declared) sim groups but holds \(actual)"
+        if !missingNids.isEmpty { s += " — missing sims \(missingNids.prefix(6).map(String.init).joined(separator: ", "))" }
+        if chunkAligned { s += ". The store ends on a buffer-chunk boundary, the mark of a save that was cut off" }
+        return s + ". The game loops forever loading this hood; hoodcheck.py --repair can write a padded copy."
+    }
+}
+
 struct HoodMeta: Decodable {
     let isHood: Bool
     let hoodId: String?
+    let check: HoodCheck?
     let sdscFields: [FieldDef]
     let sdscTables: [String: [String: String]]
     let srelFields: [FieldDef]
@@ -512,6 +540,7 @@ struct HoodMeta: Decodable {
     let memorySubjectSlot: Int
 
     enum CodingKeys: String, CodingKey {
+        case check
         case isHood = "is_hood"
         case hoodId = "hood_id"
         case sdscFields = "sdsc_fields"

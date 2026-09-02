@@ -34,8 +34,10 @@ Sim Studio edits neighborhoods the same way: a `*_Neighborhood.package`
 opens read-only, its Sims mode edits SDSC/SREL/NGBH through the ordinary
 undo stack, and **Copy Hood** (`hood_save_as`) copies the whole hood folder
 somewhere outside `Neighborhoods` and writes the edited package into the
-copy. The game's container is not readable from a plain shell (TCC), so the
-tests use the `s2savediff.py` snapshots under `~/Documents/sims2-savediff/`.
+copy. Opening a hood also runs `hoodcheck.inspect` (served in `hood_meta` as
+`check`), and the Sims pane shows a red banner when the token store is
+truncated. The game's container is not readable from a plain shell (TCC), so
+the tests use the `s2savediff.py` snapshots under `~/Documents/sims2-savediff/`.
 
 Sim Studio's read-only rule is enforced in the daemon, not the UI:
 `s2studio.protection_reason()` refuses `save` on anything under a
