@@ -142,15 +142,17 @@ enum SavePanels {
 
 // MARK: - The empty window
 
+/// Launch-time options from the environment, for driving the app from a
+/// shell where Finder's open-document event is not available.
+enum Launch {
+    /// `SIMSTUDIO_OPEN=/path/to/file.package` opens that file at launch.
+    static let openURL: URL? = ProcessInfo.processInfo.environment["SIMSTUDIO_OPEN"]
+        .map { URL(fileURLWithPath: $0) }
+}
+
 struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
-
-    /// `SIMSTUDIO_OPEN=/path/to/file.package` opens that file at launch —
-    /// for driving the app from a shell, where Finder's open-document
-    /// event is not available.
-    private static let autoOpen = ProcessInfo.processInfo.environment["SIMSTUDIO_OPEN"]
-        .map { URL(fileURLWithPath: $0) }
     // onAppear fires more than once for a window's root view.
     @MainActor private static var autoOpened = false
 
@@ -175,7 +177,7 @@ struct WelcomeView: View {
         .onOpenURL { url in open([url]) }
         .onAppear {
             trace("WelcomeView appeared (autoOpened=\(Self.autoOpened))")
-            if let url = Self.autoOpen, !Self.autoOpened {
+            if let url = Launch.openURL, !Self.autoOpened {
                 Self.autoOpened = true
                 open([url])
             }

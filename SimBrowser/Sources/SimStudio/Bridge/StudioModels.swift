@@ -144,14 +144,16 @@ struct ResourceDetail: Decodable {
     let bhav: BhavRender?
 
     enum CodingKeys: String, CodingKey {
-        case hex, decoded
-        case bhav = "bhav_render"        // "bhav" itself is the row's Bool flag
+        case row, hex, decoded
+        case bhav = "bhav_render"
         case decodeError = "decode_error"
     }
 
     init(from decoder: Decoder) throws {
-        row = try ResourceRow(from: decoder)
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // The row is nested, not spread: a detail-only key can then never
+        // collide with a row key (the Bool `bhav` flag once did).
+        row = try c.decode(ResourceRow.self, forKey: .row)
         hex = try c.decode(String.self, forKey: .hex)
         let d = try c.decodeIfPresent(JSONValue.self, forKey: .decoded)
         decoded = (d?.isNull ?? true) ? nil : d
@@ -502,30 +504,20 @@ struct FieldDef: Decodable, Identifiable {
     }
 }
 
-/// hoodcheck's verdict on the neighborhood's token store.
+/// hoodcheck's verdict on the neighborhood's token store. The prose comes
+/// from hoodcheck.py, so the app and the CLI always say the same thing.
 struct HoodCheck: Decodable {
     let healthy: Bool
-    let error: String
+    let summary: String
     let declared: Int
     let actual: Int
     let sdscCount: Int
     let missingNids: [Int]
-    let trailing: Int
-    let chunkAligned: Bool
 
     enum CodingKeys: String, CodingKey {
-        case healthy, error, declared, actual, trailing
+        case healthy, summary, declared, actual
         case sdscCount = "sdsc_count"
         case missingNids = "missing_nids"
-        case chunkAligned = "chunk_aligned"
-    }
-
-    var summary: String {
-        if !error.isEmpty { return "Token store could not be checked: \(error)" }
-        var s = "Token store declares \(declared) sim groups but holds \(actual)"
-        if !missingNids.isEmpty { s += " — missing sims \(missingNids.prefix(6).map(String.init).joined(separator: ", "))" }
-        if chunkAligned { s += ". The store ends on a buffer-chunk boundary, the mark of a save that was cut off" }
-        return s + ". The game loops forever loading this hood; hoodcheck.py --repair can write a padded copy."
     }
 }
 

@@ -39,6 +39,7 @@ final class JSONRPCClient: @unchecked Sendable {   // all mutable state is confi
     private let queue = DispatchQueue(label: "org.macadmins.simstudio.rpc")
     private var buffer = Data()
     private var nextID = 0
+    private let idLock = NSLock()
     private var pending: [Int: (Result<Data, Error>) -> Void] = [:]
     private var closed = false
 
@@ -185,29 +186,43 @@ final class JSONRPCClient: @unchecked Sendable {   // all mutable state is confi
                                                            Date().timeIntervalSince(started) * 1000).utf8))
             }
         }
-        return try await withCheckedThrowingContinuation { cont in
-            queue.async {
-                if self.closed {
-                    cont.resume(throwing: RPCFailure.transport("daemon is not running"))
-                    return
-                }
-                self.nextID += 1
-                let id = self.nextID
-                self.pending[id] = { cont.resume(with: $0) }
-                do {
-                    var line = try JSONEncoder().encode(Request(id: id, method: method, params: params))
-                    line.append(0x0A)
-                    try self.inPipe.fileHandleForWriting.write(contentsOf: line)
-                } catch {
-                    self.pending[id] = nil
-                    cont.resume(throwing: RPCFailure.transport("could not write to daemon: \(error.localizedDescription)"))
-                    return
-                }
-                self.queue.asyncAfter(deadline: .now() + timeout) {
-                    if let cb = self.pending.removeValue(forKey: id) {
-                        cb(.failure(RPCFailure.transport("\(method) timed out after \(Int(timeout))s")))
+        // Honour task cancellation: a SwiftUI `.task(id:)` that moves on
+        // (a new selection, a new preview) cancels the old load, and the
+        // stale reply must throw rather than land in the view. The daemon
+        // still answers; the answer is dropped here.
+        try Task.checkCancellation()
+        let id: Int = idLock.withLock { nextID += 1; return nextID }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { cont in
+                queue.async {
+                    if self.closed {
+                        cont.resume(throwing: RPCFailure.transport("daemon is not running"))
+                        return
+                    }
+                    if Task.isCancelled {
+                        cont.resume(throwing: CancellationError())
+                        return
+                    }
+                    self.pending[id] = { cont.resume(with: $0) }
+                    do {
+                        var line = try JSONEncoder().encode(Request(id: id, method: method, params: params))
+                        line.append(0x0A)
+                        try self.inPipe.fileHandleForWriting.write(contentsOf: line)
+                    } catch {
+                        self.pending[id] = nil
+                        cont.resume(throwing: RPCFailure.transport("could not write to daemon: \(error.localizedDescription)"))
+                        return
+                    }
+                    self.queue.asyncAfter(deadline: .now() + timeout) {
+                        if let cb = self.pending.removeValue(forKey: id) {
+                            cb(.failure(RPCFailure.transport("\(method) timed out after \(Int(timeout))s")))
+                        }
                     }
                 }
+            }
+        } onCancel: {
+            queue.async {
+                if let cb = self.pending.removeValue(forKey: id) { cb(.failure(CancellationError())) }
             }
         }
     }

@@ -20,24 +20,6 @@ struct SimsPane: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if let check = session.hoodMeta?.check, !check.healthy {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
-                    Text(check.summary).font(.callout)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.red.opacity(0.12))
-                Divider()
-            }
-            panes
-        }
-        .task { await session.loadSims() }
-    }
-
-    private var panes: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
                 TextField("Search sims", text: $search)
@@ -81,6 +63,7 @@ struct SimsPane: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .task { await session.loadSims() }
     }
 }
 

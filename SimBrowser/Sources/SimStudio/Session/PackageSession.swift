@@ -42,10 +42,9 @@ final class PackageSession: ObservableObject, Identifiable {
     }
 
     private var client: JSONRPCClient?
-    private var detailTask: Task<Void, Never>?
     /// Bumped per detail load; only the newest load may write `detail`, so
     /// an older fetch that lands late (after an undo, say) cannot overwrite
-    /// a newer one — task cancellation alone does not order the writes.
+    /// a newer one.
     private var detailGeneration = 0
 
     init(url: URL) {
@@ -99,7 +98,6 @@ final class PackageSession: ObservableObject, Identifiable {
     }
 
     func close() {
-        detailTask?.cancel()
         client?.shutdown()
         client = nil
     }
@@ -116,26 +114,23 @@ final class PackageSession: ObservableObject, Identifiable {
     }
 
     private func loadDetail() {
-        detailTask?.cancel()
         guard let tgi = selection, let c = client else {
-            trace("detail cleared (selection \(selection?.description ?? "nil"))")
+            detailGeneration += 1            // any load in flight is now stale
+            detailLoading = false
             detail = nil
             return
         }
         detailLoading = true
         detailGeneration += 1
         let generation = detailGeneration
-        trace("detail load #\(generation) \(tgi)")
-        detailTask = Task {
+        Task {
             do {
                 let d = try await c.call("get_resource", ["tgi": tgi.json], as: ResourceDetail.self)
                 let write = generation == detailGeneration && selection == tgi
-                trace("detail load #\(generation) got '\(d.decoded?["entries"]?[0]?["value"]?.stringValue ?? "-")' write=\(write) (latest #\(detailGeneration), selection \(selection?.description ?? "nil"))")
-                if write {
-                    detail = d
-                }
+                trace("detail load #\(generation) \(tgi) write=\(write)")
+                if write { detail = d }
             } catch {
-                trace("detail load #\(generation) failed: \(error)")
+                trace("detail load #\(generation) \(tgi) failed: \(error)")
                 if generation == detailGeneration { report(error) }
             }
             if generation == detailGeneration { detailLoading = false }
@@ -252,10 +247,15 @@ final class PackageSession: ObservableObject, Identifiable {
             let r = try await $0.call(method, as: HistoryResult.self)
             self.summary = r.summary
             await self.reloadIndex()
+            // Undoing an add or a rename removes the selected TGI from the
+            // index; a selection that no longer exists would fetch nothing.
+            let live = Set(self.rows.map(\.tgi))
+            self.selectedTGIs = self.selectedTGIs.filter(live.contains)
             // `mutate` refreshes the selected resource afterwards; only
             // pick a selection here when there is none.
-            if self.selection == nil, let first = r.tgis.first,
-               self.rows.contains(where: { $0.tgi == first }) { self.selectedTGIs = [first] }
+            if self.selection == nil, let first = r.tgis.first, live.contains(first) {
+                self.selectedTGIs = [first]
+            }
         }
     }
 
@@ -408,9 +408,11 @@ final class PackageSession: ObservableObject, Identifiable {
 
     var isHood: Bool { hoodMeta?.isHood ?? false }
 
-    /// Ask whether this package is a neighborhood; cheap, called after open.
+    /// Ask whether this package is a neighborhood, and what hoodcheck says
+    /// about its token store. Cheap: the daemon walks the store it holds in
+    /// memory, so this is re-asked after every edit of a hood.
     func loadHoodMeta() async {
-        guard let c = client, hoodMeta == nil else { return }
+        guard let c = client else { return }
         hoodMeta = try? await c.call("hood_meta", as: HoodMeta.self)
     }
 
@@ -479,6 +481,7 @@ final class PackageSession: ObservableObject, Identifiable {
         do {
             try await body(c)
             refreshDetail()
+            if isHood { await loadHoodMeta() }      // the store may have changed
             return true
         } catch {
             report(error)

@@ -520,17 +520,16 @@ def m_meta(session: Session, params: dict) -> dict:
 def m_get_resource(session: Session, params: dict) -> dict:
     session.require_open()
     r = session.require(_tgi(params))
-    out = _index_row(session, r)
-    out["hex"] = r.data.hex()
-    out["decoded"] = None
-    out["decode_error"] = None
+    # The row is nested rather than spread into the reply, so no detail
+    # key can ever collide with a row key (the Bool `bhav` flag once did).
+    out = {"row": _index_row(session, r), "hex": r.data.hex(),
+           "decoded": None, "decode_error": None}
     if r.type_id in s2object.PARSERS:
         try:
             out["decoded"] = to_json(s2object.parse_resource(r.type_id, r.data))
         except (ValueError, struct.error, IndexError) as exc:
             out["decode_error"] = str(exc)
     if r.type_id == s2object.TYPE_BHAV:
-        # Under its own key: "bhav" is the row's boolean flag.
         out["bhav_render"] = _render_bhav(session, r)
     return out
 
@@ -1106,23 +1105,36 @@ def _tokens_json(tokens) -> list:
 
 
 def _hood_check(session: Session) -> "dict | None":
-    """hoodcheck's verdict on the token store, once per session.
+    """hoodcheck's verdict on the token store the session holds.
 
     The store declares how many sim groups it holds; a failed save keeps
     only whole buffer chunks, and the game then loops forever on load.
     parse_ngbh resyncs past the damage, so this is the only place the
-    editor would notice it.
+    editor would notice it. Runs on the in-memory bytes — the ones a Copy
+    Hood will write — and is cheap enough (a linear walk) to recompute on
+    every hood_meta, so it is never stale after an edit or an undo.
+
+    A failure inside the check must not take hood_meta down with it:
+    hood_meta is also what tells the app the file is a hood at all.
     """
-    if session.cache.get("check", ...) is ...:
-        rep = hoodcheck.inspect(session.path) if _hood_dir(session) else None
-        session.cache["check"] = None if rep is None else {
-            "healthy": rep.healthy, "error": rep.error,
-            "declared": rep.declared, "actual": rep.actual,
-            "sdsc_count": rep.sdsc_count, "missing_nids": rep.missing_nids,
-            "trailing": len(rep.trailing), "ngbh_size": rep.ngbh_size,
-            "chunk_aligned": bool(rep.ngbh_size) and rep.ngbh_size % hoodcheck.CHUNK == 0,
-        }
-    return session.cache["check"]
+    if _hood_dir(session) is None:
+        return None
+    try:
+        ngbh = _ngbh_resource(session)
+        if ngbh is None:
+            rep = hoodcheck.Report(hood="", package=session.path, error="no NGBH resource")
+        else:
+            nids = [r.instance_id for r in session.resources if r.type_id == s2neighborhood.TID_SDSC]
+            rep = hoodcheck.inspect_bytes(ngbh.data, nids, package=session.path)
+        return {"healthy": rep.healthy, "summary": rep.verdict(), "error": rep.error,
+                "declared": rep.declared, "actual": rep.actual,
+                "sdsc_count": rep.sdsc_count, "missing_nids": rep.missing_nids,
+                "trailing": len(rep.trailing), "ngbh_size": rep.ngbh_size,
+                "chunk_aligned": rep.chunk_aligned}
+    except Exception as exc:  # noqa: BLE001 — a diagnostic, not a gate
+        return {"healthy": False, "summary": f"Token store could not be checked: {exc}.",
+                "error": str(exc), "declared": 0, "actual": 0, "sdsc_count": 0,
+                "missing_nids": [], "trailing": 0, "ngbh_size": 0, "chunk_aligned": False}
 
 
 def m_hood_meta(session: Session, params: dict) -> dict:
@@ -1300,7 +1312,6 @@ def m_hood_save_as(session: Session, params: dict) -> dict:
     session.readonly_reason = ""
     session.dirty = False
     session.cache.pop("characters", None)
-    session.cache.pop("check", None)
     return _summary(session)
 
 

@@ -47,6 +47,8 @@ struct PreviewPane: View {
             } else if detail.row.isMesh {
                 mesh = try await session.previewMesh(detail.tgi)
             }
+        } catch is CancellationError {
+            return                      // superseded by a newer selection
         } catch {
             self.error = error.localizedDescription
         }

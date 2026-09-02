@@ -10,14 +10,23 @@ import Foundation
 /// pointer. It is for driving the app from a shell where its window cannot
 /// be seen; it is not a substitute for clicking through the views.
 enum SelfDrive {
-    static let enabled = ProcessInfo.processInfo.environment["SIMSTUDIO_SELFDRIVE"] != nil
+    private static let enabled = ProcessInfo.processInfo.environment["SIMSTUDIO_SELFDRIVE"] != nil
 
     /// Only the window for the file named in SIMSTUDIO_OPEN drives; SwiftUI
     /// may restore other windows from the previous run alongside it.
     @MainActor
     static func applies(to session: PackageSession) -> Bool {
-        guard enabled, let target = ProcessInfo.processInfo.environment["SIMSTUDIO_OPEN"] else { return false }
-        return URL(fileURLWithPath: target).standardizedFileURL == session.url.standardizedFileURL
+        guard enabled, let target = Launch.openURL else { return false }
+        return target.standardizedFileURL == session.url.standardizedFileURL
+    }
+
+    /// Poll on the main actor until `ok`, up to `ticks` × 100 ms, else fail.
+    @MainActor
+    private static func settle(_ what: String, ticks: Int = 50, until ok: () -> Bool) async {
+        for _ in 0..<ticks where !ok() {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard ok() else { fail("timed out waiting for \(what)") }
     }
 
     @MainActor private static var launched = false
@@ -41,19 +50,17 @@ enum SelfDrive {
 
     @MainActor
     static func run(_ session: PackageSession) async {
+        // The view's `.task` may re-fire while the first `start()` is still
+        // opening; wait for that rather than assert on it.
+        await settle("the package to open", ticks: 600) { session.phase != .opening }
         guard session.phase == .ready else { fail("package did not open: \(session.phase)") }
         log("opened \(session.title): \(session.rows.count) rows, readonly=\(session.isReadonly)")
 
         // 1. A STR# row that decodes with at least one entry.
         var picked: (ResourceRow, JSONValue)?
-        var waited = 0
         for candidate in session.rows.filter({ $0.decodable && $0.typeName == "STR#" }).prefix(8) {
             session.selectedTGIs = [candidate.tgi]
-            waited = 0
-            while session.detail?.tgi != candidate.tgi && waited < 50 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                waited += 1
-            }
+            await settle("detail \(candidate.tgi)") { session.detail?.tgi == candidate.tgi }
             if let d = session.detail, d.tgi == candidate.tgi, let dec = d.decoded,
                (dec["entries"]?.arrayValue?.count ?? 0) > 0 {
                 picked = (candidate, dec)
@@ -70,7 +77,9 @@ enum SelfDrive {
 
         // 2. Edit the first string the way StrEditor's binding does, and apply.
         let original = draft["entries"]?[0]?["value"]?.stringValue ?? ""
-        let edited = "Sim Studio was here"
+        // A second run on the same scratch copy finds the last run's edit
+        // already there; a no-op put is (correctly) not an edit, so vary it.
+        let edited = original == "Sim Studio was here" ? "Sim Studio was here again" : "Sim Studio was here"
         draft["entries"]?[0]?["value"] = .string(edited)
         guard await session.putDecoded(row.tgi, draft) else { fail("putDecoded failed: \(session.errorMessage ?? "?")") }
         log("applied edit: '\(original)' -> '\(edited)'; dirty=\(session.isDirty) undo=\(session.undoLabel)")
@@ -79,28 +88,20 @@ enum SelfDrive {
         // 3. Undo, redo — the toolbar buttons. The detail pane refreshes
         //    asynchronously, so wait for it the way a user's eyes would.
         func firstString() -> String? { session.detail?.decoded?["entries"]?[0]?["value"]?.stringValue }
-        func waitFor(_ expected: String, _ what: String) async {
-            var n = 0
-            while firstString() != expected && n < 30 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                n += 1
-            }
-            guard firstString() == expected else {
-                fail("\(what): detail shows \(firstString() ?? "nil"), expected '\(expected)' (\(session.errorMessage ?? "no error"))")
-            }
-        }
         await session.undo()
-        log("after undo: canUndo=\(session.canUndo) canRedo=\(session.canRedo) redo='\(session.redoLabel)'")
-        await waitFor(original, "undo")
+        await settle("undo to show '\(original)'") { firstString() == original }
         await session.redo()
-        log("after redo: canUndo=\(session.canUndo) canRedo=\(session.canRedo) undo='\(session.undoLabel)' dirty=\(session.isDirty)")
-        await waitFor(edited, "redo")
+        await settle("redo to show '\(edited)'") { firstString() == edited }
         log("undo/redo OK")
 
-        // 4. Rename + compression toggle + new resource, then delete it.
-        let fresh = TGI(type: row.type, group: 0xFFFFFFFF, instance: 0x7FF0, instanceHi: 0)
+        // 4. Rename + compression toggle + new resource, then delete it, at
+        //    two instance ids the package does not already use.
+        let used = Set(session.rows.filter { $0.type == row.type && $0.group == 0xFFFFFFFF }.map(\.instance))
+        let free = (0x7F00...0x7FFF).filter { !used.contains(UInt32($0)) }.prefix(2).map(UInt32.init)
+        guard free.count == 2 else { fail("no free instance ids in the private group") }
+        let fresh = TGI(type: row.type, group: 0xFFFFFFFF, instance: free[0], instanceHi: 0)
         guard await session.addResource(fresh, bytes: [UInt8](repeating: 0, count: 68)) else { fail("addResource") }
-        let moved = TGI(type: row.type, group: 0xFFFFFFFF, instance: 0x7FF1, instanceHi: 0)
+        let moved = TGI(type: row.type, group: 0xFFFFFFFF, instance: free[1], instanceHi: 0)
         guard await session.rename(fresh, to: moved) else { fail("rename") }
         guard await session.setCompressed([moved], true) else { fail("setCompressed") }
         guard await session.delete([moved]) else { fail("delete") }
@@ -114,11 +115,7 @@ enum SelfDrive {
         await check.start()
         guard check.phase == .ready else { fail("re-open failed: \(check.phase)") }
         check.selectedTGIs = [row.tgi]
-        waited = 0
-        while check.detail?.tgi != row.tgi && waited < 50 {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            waited += 1
-        }
+        await settle("re-read detail") { check.detail?.tgi == row.tgi }
         let back = check.detail?.decoded?["entries"]?[0]?["value"]?.stringValue
         guard back == edited else {
             fail("re-read string is \(back ?? "nil"), expected '\(edited)'; detail=\(check.detail?.tgi.description ?? "nil") "
@@ -131,11 +128,7 @@ enum SelfDrive {
         // 6. A BHAV, if there is one: fetch, transform, apply, undo.
         if let b = session.rows.first(where: { $0.bhav }) {
             session.selectedTGIs = [b.tgi]
-            waited = 0
-            while session.detail?.tgi != b.tgi && waited < 50 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                waited += 1
-            }
+            await settle("BHAV detail") { session.detail?.tgi == b.tgi }
             await session.loadBhavMeta()
             guard let bd = session.detail?.decoded, session.bhavMeta != nil else { fail("BHAV did not decode") }
             let n = bd["instructions"]?.arrayValue?.count ?? 0

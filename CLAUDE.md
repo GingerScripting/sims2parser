@@ -168,6 +168,7 @@ for one URL, so every open is deferred by a beat.
 | `s2studio.py` | The Sim Studio daemon: JSON-RPC over stdio, one session per open package, undo stack, the read-only policy (`protection_reason`), decoded↔JSON conversion (`to_json`/`from_json`, with `$type`, `$hex`, `$props`). |
 | `s2tools.py` | Merge one package's resources into another and split a selection out — pure list operations plus a small CLI. |
 | `s2package.py` | Pure in-memory package operations the daemon and its undo stack share, and `LazyResource` — a compressed resource that inflates on first access so objects.package opens in a quarter second. |
+| `hoodcheck.py` | Detects a truncated NGBH token store (declared vs actual sim groups, 8 KB chunk alignment) and writes a padded or trimmed **copy**. `inspect_bytes` is the in-memory form the daemon runs on every hood open and edit; `Report.verdict()` is the one wording both the CLI and the app show. |
 | `s2savediff.py` | Save snapshot/diff — the discovery tool for unknown formats |
 | `s2doctor.py` | Reads the game's own error logs; scans Downloads for conflicts |
 | `make_wants.py` | Regenerates `wants.json` (want GUID → definition) from the game's own `Wants.package` |

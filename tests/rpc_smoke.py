@@ -130,6 +130,7 @@ def main() -> int:
             assert index["type_names"][str(row["type"])] == "STR#"
 
             got = c.call("get_resource", tgi=tgi)
+            assert got["row"]["instance"] == row["instance"] and got["row"]["decodable"]
             assert got["decoded"] and got["decode_error"] is None, got
             assert got["decoded"]["$type"] == "StrResource"
             assert bytes.fromhex(got["hex"]) == \
@@ -318,8 +319,8 @@ def hood_smoke() -> None:
             assert meta["is_hood"] and meta["sdsc_fields"] and meta["sdsc_tables"]["career"]
             check = meta["check"]
             assert check is not None and "healthy" in check and check["sdsc_count"] > 0, check
-            print(f"hoodcheck: {'healthy' if check['healthy'] else 'DAMAGED'} "
-                  f"(declared {check['declared']}, actual {check['actual']}, {check['sdsc_count']} SDSC)")
+            assert check["summary"].startswith("Token store"), check["summary"]
+            print(f"hoodcheck: {check['summary']}")
             sims = c.call("hood_sims")["sims"]
             assert sims, "no sims"
             named = [s for s in sims if s["first"] and s["last"]]
