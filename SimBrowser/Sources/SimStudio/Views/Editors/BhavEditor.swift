@@ -1,4 +1,5 @@
 import SwiftUI
+import SimKit
 import SimStudioCore
 
 /// BHAV: the header, the instruction list, and an operand editor for the
@@ -38,7 +39,10 @@ struct BhavEditor: View {
         VStack(spacing: 0) {
             header
             Divider()
-            HStack(spacing: 0) {
+            // Table above, form below: side by side they demanded more width
+            // than the pane and the hosting view spilled them over the
+            // neighbouring columns.
+            VStack(spacing: 0) {
                 VStack(spacing: 0) {
                     Table(rows, selection: $selected) {
                         TableColumn("#") { Text("\($0.id)").monospacedDigit() }.width(36)
@@ -52,18 +56,20 @@ struct BhavEditor: View {
                     Divider()
                     structureBar
                 }
-                .frame(minWidth: 420)
+                .frame(maxHeight: .infinity)
                 Divider()
                 ScrollView {
                     if let i = selected, i < instructions.count {
                         InstructionForm(instruction: $draft["instructions"][i], index: i,
                                         count: instructions.count, meta: meta, format: format)
                             .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
                         Text("Select an instruction").foregroundStyle(.secondary).padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .frame(minWidth: 300)
+                .frame(height: 260)
             }
             if !warnings.isEmpty {
                 Divider()
@@ -81,24 +87,33 @@ struct BhavEditor: View {
         .task { await session.loadBhavMeta() }
     }
 
+    /// Wraps rather than squeezes: in a plain HStack the labels collapsed to
+    /// one letter per line once the pane got narrow.
     private var header: some View {
-        HStack(spacing: 14) {
-            TextField("Name", text: $draft.string("name")).frame(maxWidth: 320)
-            LabeledContent("Type") { NumberField(value: $draft.int("bhav_type"), width: 44) }
-            LabeledContent("Args") { NumberField(value: $draft.int("argc"), width: 44) }
-            LabeledContent("Locals") { NumberField(value: $draft.int("localc"), width: 44) }
-            LabeledContent("Flags") { NumberField(value: $draft.int("flags"), width: 44) }
+        FlowLayout(spacing: 12) {
+            TextField("Name", text: $draft.string("name"))
+                .frame(width: 260)
+            headerField("Type", $draft.int("bhav_type"))
+            headerField("Args", $draft.int("argc"))
+            headerField("Locals", $draft.int("localc"))
+            headerField("Flags", $draft.int("flags"))
             Text(String(format: "format 0x%04X · %d instructions", format, instructions.count))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary).fixedSize()
             if format < 0x8007 {
                 Button("Convert to 0x8007") { transform("convert", at: 0) }
                     .controlSize(.small)
                     .help("Older formats hold 8 operand bytes and one-byte branch targets; 0x8007 lifts both limits. Every instruction is kept.")
             }
-            Spacer()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
+    }
+
+    private func headerField(_ label: String, _ value: Binding<Int>) -> some View {
+        HStack(spacing: 4) {
+            Text(label).foregroundStyle(.secondary).fixedSize()
+            NumberField(value: value, width: 48)
+        }
     }
 
     private var format: Int { draft["format_version"]?.intValue ?? 0 }

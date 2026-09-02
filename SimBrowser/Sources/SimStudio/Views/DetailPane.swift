@@ -28,6 +28,7 @@ struct DetailPane: View {
                         body(for: d)
                     }
                     .id(d.tgi)
+                    .clipped()
                 }
                 .onAppear { pickTab(for: d) }
                 .onChange(of: d.tgi) { _ in pickTab(for: d) }
