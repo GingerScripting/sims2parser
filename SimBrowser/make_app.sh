@@ -31,7 +31,7 @@ fi
 # launches fine and then fails at extraction time with a bare ImportError.
 BROWSER_FILES="s2neighborhood.py s2parser.py s2ngbh.py s2luastate.py s2ltw.py careers.json wants.json"
 STUDIO_FILES="s2studio.py s2package.py s2tools.py s2object.py s2writer.py s2parser.py s2doctor.py \
-              s2clone.py s2texture.py s2mesh.py s2ngbh.py \
+              s2clone.py s2texture.py s2mesh.py s2ngbh.py hoodcheck.py \
               s2neighborhood.py s2luastate.py s2ltw.py careers.json wants.json"
 
 build_bundle() {

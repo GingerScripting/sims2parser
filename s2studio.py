@@ -1026,6 +1026,7 @@ def m_preview_mesh(session: Session, params: dict) -> dict:
 
 import shutil
 
+import hoodcheck
 import s2neighborhood
 import s2ngbh
 
@@ -1103,12 +1104,33 @@ def _tokens_json(tokens) -> list:
              "values": list(t.values)} for t in tokens]
 
 
+def _hood_check(session: Session) -> "dict | None":
+    """hoodcheck's verdict on the token store, once per session.
+
+    The store declares how many sim groups it holds; a failed save keeps
+    only whole buffer chunks, and the game then loops forever on load.
+    parse_ngbh resyncs past the damage, so this is the only place the
+    editor would notice it.
+    """
+    if session.cache.get("check", ...) is ...:
+        rep = hoodcheck.inspect(session.path) if _hood_dir(session) else None
+        session.cache["check"] = None if rep is None else {
+            "healthy": rep.healthy, "error": rep.error,
+            "declared": rep.declared, "actual": rep.actual,
+            "sdsc_count": rep.sdsc_count, "missing_nids": rep.missing_nids,
+            "trailing": len(rep.trailing), "ngbh_size": rep.ngbh_size,
+            "chunk_aligned": bool(rep.ngbh_size) and rep.ngbh_size % hoodcheck.CHUNK == 0,
+        }
+    return session.cache["check"]
+
+
 def m_hood_meta(session: Session, params: dict) -> dict:
     session.require_open()
     d = _hood_dir(session)
     return {
         "is_hood": d is not None,
         "hood_id": d.name if d else None,
+        "check": _hood_check(session),
         "sdsc_fields": [{"name": n, "kind": k, "offset": off, "fmt": fmt}
                         for off, fmt, n, k in s2neighborhood.SDSC_FIELDS],
         "sdsc_tables": {k: {str(a): b for a, b in v.items()}
@@ -1277,6 +1299,7 @@ def m_hood_save_as(session: Session, params: dict) -> dict:
     session.readonly_reason = ""
     session.dirty = False
     session.cache.pop("characters", None)
+    session.cache.pop("check", None)
     return _summary(session)
 
 
