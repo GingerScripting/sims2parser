@@ -43,6 +43,10 @@ final class PackageSession: ObservableObject, Identifiable {
 
     private var client: JSONRPCClient?
     private var detailTask: Task<Void, Never>?
+    /// Bumped per detail load; only the newest load may write `detail`, so
+    /// an older fetch that lands late (after an undo, say) cannot overwrite
+    /// a newer one — task cancellation alone does not order the writes.
+    private var detailGeneration = 0
 
     init(url: URL) {
         self.url = url
@@ -114,20 +118,27 @@ final class PackageSession: ObservableObject, Identifiable {
     private func loadDetail() {
         detailTask?.cancel()
         guard let tgi = selection, let c = client else {
+            trace("detail cleared (selection \(selection?.description ?? "nil"))")
             detail = nil
             return
         }
         detailLoading = true
+        detailGeneration += 1
+        let generation = detailGeneration
+        trace("detail load #\(generation) \(tgi)")
         detailTask = Task {
             do {
                 let d = try await c.call("get_resource", ["tgi": tgi.json], as: ResourceDetail.self)
-                if !Task.isCancelled, selection == tgi {
+                let write = generation == detailGeneration && selection == tgi
+                trace("detail load #\(generation) got '\(d.decoded?["entries"]?[0]?["value"]?.stringValue ?? "-")' write=\(write) (latest #\(detailGeneration), selection \(selection?.description ?? "nil"))")
+                if write {
                     detail = d
                 }
             } catch {
-                if !Task.isCancelled { report(error) }
+                trace("detail load #\(generation) failed: \(error)")
+                if generation == detailGeneration { report(error) }
             }
-            if selection == tgi { detailLoading = false }
+            if generation == detailGeneration { detailLoading = false }
         }
     }
 
@@ -241,9 +252,10 @@ final class PackageSession: ObservableObject, Identifiable {
             let r = try await $0.call(method, as: HistoryResult.self)
             self.summary = r.summary
             await self.reloadIndex()
-            if let s = self.selection, r.tgis.contains(s) { self.refreshDetail() }
-            else if self.selection == nil, let first = r.tgis.first,
-                    self.rows.contains(where: { $0.tgi == first }) { self.selectedTGIs = [first] }
+            // `mutate` refreshes the selected resource afterwards; only
+            // pick a selection here when there is none.
+            if self.selection == nil, let first = r.tgis.first,
+               self.rows.contains(where: { $0.tgi == first }) { self.selectedTGIs = [first] }
         }
     }
 

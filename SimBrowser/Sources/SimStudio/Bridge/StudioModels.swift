@@ -144,7 +144,8 @@ struct ResourceDetail: Decodable {
     let bhav: BhavRender?
 
     enum CodingKeys: String, CodingKey {
-        case hex, decoded, bhav
+        case hex, decoded
+        case bhav = "bhav_render"        // "bhav" itself is the row's Bool flag
         case decodeError = "decode_error"
     }
 

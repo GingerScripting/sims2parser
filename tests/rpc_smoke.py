@@ -227,7 +227,7 @@ def main() -> int:
                 btgi = {"type": brow["type"], "group": brow["group"],
                         "instance": brow["instance"], "instance_hi": brow["instance_hi"]}
                 got = c.call("get_resource", tgi=btgi)
-                assert got["decoded"]["$type"] == "BhavRes" and got["bhav"].get("tree"), got["bhav"]
+                assert got["decoded"]["$type"] == "BhavRes" and got["bhav_render"].get("tree"), got["bhav_render"]
                 bmeta = c.call("bhav_meta")
                 assert "2" in bmeta["layouts"] and bmeta["sentinels"]["true"] == 0xFFFD
                 n = len(got["decoded"]["instructions"])
@@ -242,7 +242,7 @@ def main() -> int:
                 r = c.call("put_resource", tgi=btgi, decoded=edited)
                 assert r["changed"]
                 back = c.call("get_resource", tgi=btgi)
-                assert back["decoded"]["name"] == "Sim Studio tree" and "Sim Studio tree" in back["bhav"]["flat"]
+                assert back["decoded"]["name"] == "Sim Studio tree" and "Sim Studio tree" in back["bhav_render"]["flat"]
                 c.call("undo")
                 print(f"BHAV {got['decoded']['name']!r}: {n} instructions, "
                       f"format 0x{got['decoded']['format_version']:04X}; transform/apply/undo OK")
