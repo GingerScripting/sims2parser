@@ -130,6 +130,11 @@ def main() -> int:
             assert index["type_names"][str(row["type"])] == "STR#"
             assert meta["type_descriptions"][str(row["type"])].startswith("Text list")
 
+            ov = c.call("overview")
+            assert ov["kind"] == "object" and ov["objects"], ov
+            assert ov["objects"][0]["name"] and ov["headline"], ov
+            assert isinstance(ov["objects"][0]["interactions"], list)
+
             # Names: every BHAV names itself; asking for one TGI gives just it.
             names = c.call("names")["names"]
             named = {(t, g, i, hi): n for t, g, i, hi, n in names}

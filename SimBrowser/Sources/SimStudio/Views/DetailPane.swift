@@ -6,6 +6,8 @@ import SimKit
 /// selected resource. Everything scrollable lives inside an IsolatedPane.
 struct DetailPane: View {
     @ObservedObject var session: PackageSession
+    /// Select a resource from the overview, clearing the table's filter.
+    var reveal: (TGI) -> Void = { _ in }
 
     enum Tab: String, CaseIterable, Identifiable {
         case decoded = "Decoded"
@@ -35,41 +37,44 @@ struct DetailPane: View {
             } else if session.detailLoading {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(spacing: 10) {
-                    Image(systemName: "shippingbox").font(.largeTitle).foregroundStyle(.tertiary)
-                    Text("Select a resource").font(.headline)
-                    Text("Pick a type on the left, then a row in the middle. Decoded opens an editor "
-                         + "when the toolkit has one; Hex always works. Edits stay in memory until you "
-                         + "Save, or Save As for a read-only file.")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 380)
+                IsolatedPane {
+                    OverviewPane(session: session, reveal: reveal)
                 }
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .id("overview")
+                .clipped()
             }
         }
     }
 
+    /// Three lines: the name and the view controls; what the type is; the
+    /// ids. Earlier this was one row and truncated everything in it.
     private func header(_ d: ResourceDetail) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(d.row.name ?? d.row.typeName).font(.title3).fontWeight(.semibold)
-                    .lineLimit(1).textSelection(.enabled)
-                if d.row.name != nil {
-                    Text(d.row.typeName).font(.callout).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                    .help(d.row.name ?? d.row.typeName)
+                Spacer(minLength: 8)
+                Button {
+                    session.selectedTGIs = []
+                } label: {
+                    Label("Overview", systemImage: "info.circle")
                 }
-                Text(hex8(d.row.type)).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-                if let what = session.typeDescription(d.row.type) {
-                    Text(what).font(.callout).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer()
+                .help("Back to the description of the whole package")
                 Picker("", selection: $tab) {
                     ForEach(tabs(for: d)) { t in Text(t.rawValue).tag(t) }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 220)
+                .fixedSize()
             }
+            HStack(spacing: 8) {
+                Text(d.row.typeName).fontWeight(.medium)
+                Text(hex8(d.row.type)).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                if let what = session.typeDescription(d.row.type) {
+                    Text("· " + what).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            .font(.callout)
             HStack(spacing: 14) {
                 Text(d.tgi.description).font(.system(.callout, design: .monospaced))
                 Text("\(d.row.size) bytes").font(.callout).foregroundStyle(.secondary)

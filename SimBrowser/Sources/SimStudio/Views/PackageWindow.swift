@@ -32,6 +32,7 @@ struct PackageRoot: View {
 
 /// Which slice of the index the table shows, driven by the type tree.
 enum TreeFilter: Hashable {
+    case overview       // all rows, and the detail pane back on the overview
     case all
     case type(UInt32)
     case typeGroup(UInt32, UInt32)
@@ -122,7 +123,10 @@ struct PackageWindow: View {
                                   onSplit: { tool = .split($0) })
                         .frame(minWidth: 460)
                     Divider()
-                    DetailPane(session: session)
+                    DetailPane(session: session, reveal: { tgi in
+                        filter = .all
+                        session.selectedTGIs = [tgi]
+                    })
                         .frame(minWidth: 440, maxWidth: .infinity)
                 }
             }
@@ -178,6 +182,9 @@ struct PackageWindow: View {
             }
         }
         .searchable(text: $search, placement: .toolbar, prompt: "Filter by name, type, or hex id")
+        .onChange(of: filter) { f in
+            if f == .overview { session.selectedTGIs = [] }
+        }
     }
 
     /// The file's folder, with the home directory abbreviated — so a scratch
@@ -207,7 +214,7 @@ struct PackageWindow: View {
     private var filteredRows: [ResourceRow] {
         let base: [ResourceRow]
         switch filter {
-        case .all: base = session.rows
+        case .all, .overview: base = session.rows
         case .type(let t): base = session.rows.filter { $0.type == t }
         case .typeGroup(let t, let g): base = session.rows.filter { $0.type == t && $0.group == g }
         }

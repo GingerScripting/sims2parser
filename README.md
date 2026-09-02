@@ -207,9 +207,16 @@ with the whole file-format side living in Python:
 
 ### Finding your way around
 
-A package is a bag of *resources*, each identified by a type, a group, and an
-instance number — that is all the file format stores, so that is what the
-table shows. Sim Studio adds two things to make the bag readable:
+A package opens on its **Overview**: what kind of package it is (an object,
+a global mod, a mesh, a recolour, a neighborhood), each object it defines
+with its catalog name, price, description and pie-menu entries, and which of
+the game's own resources it replaces. Every item there is a button that
+jumps to the resource behind it; the Overview button in the detail pane, or
+the Overview row in the type tree, comes back.
+
+Behind that, a package is a bag of *resources*, each identified by a type, a
+group, and an instance number — that is all the file format stores, so that
+is what the table shows. Sim Studio adds two things to make the bag readable:
 
 - **Names.** Most resources name themselves inside their own bytes (a BHAV's
   or OBJD's 64-byte filename, a mesh or texture's scenegraph name), and the

@@ -28,6 +28,10 @@ public final class PackageSession: ObservableObject, Identifiable {
     @Published public private(set) var busy = false
     @Published public var errorMessage: String?
     @Published public private(set) var progress: TaskProgress?
+    /// The plain-words account shown when nothing is selected. Loaded on
+    /// demand; `editCount` ticks after every change so the pane re-reads it.
+    @Published public private(set) var overview: Overview?
+    @Published public private(set) var editCount = 0
 
     /// What the table has selected. The detail pane follows a single
     /// selection; the context menu and split act on the whole set.
@@ -145,6 +149,15 @@ public final class PackageSession: ObservableObject, Identifiable {
             applyNames()
         } catch {
             trace("names: \(describe(error))")      // cosmetic: the rows stay unnamed
+        }
+    }
+
+    public func loadOverview() async {
+        guard let c = client else { return }
+        do {
+            overview = try await c.call("overview", as: Overview.self)
+        } catch {
+            report(error)
         }
     }
 
@@ -359,6 +372,7 @@ public final class PackageSession: ObservableObject, Identifiable {
         do {
             let r = try await c.call("clone", p, as: CloneResult.self)
             summary = r.summary
+            editCount += 1
             await reloadIndex()
             await loadNames()
             refreshDetail()
@@ -389,6 +403,7 @@ public final class PackageSession: ObservableObject, Identifiable {
                                                "on_conflict": .string(replace ? "replace" : "skip")],
                                      as: MergeResult.self)
             summary = r.summary
+            editCount += 1
             await reloadIndex()
             await loadNames()
             return r
@@ -410,6 +425,7 @@ public final class PackageSession: ObservableObject, Identifiable {
                 let gone = Set(tgis)
                 rows.removeAll { gone.contains($0.tgi) }
                 selectedTGIs.subtract(gone)
+                editCount += 1
             }
             return r
         } catch {
@@ -526,6 +542,7 @@ public final class PackageSession: ObservableObject, Identifiable {
         defer { busy = false }
         do {
             try await body(c)
+            editCount += 1
             refreshDetail()
             if isHood { await loadHoodMeta() }      // the store may have changed
             return true

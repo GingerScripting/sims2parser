@@ -138,6 +138,53 @@ public struct ResourceRow: Decodable, Identifiable, Hashable {
     public var decoderLabel: String { decodable ? "yes" : (bhav ? "tree" : "") }
 }
 
+/// The daemon's plain-words account of a package: what kind it is, the
+/// objects it defines, and the game resources it replaces.
+public struct Overview: Decodable {
+    public let kind: String
+    public let headline: String
+    public let notes: [String]
+    public let objects: [OverviewObject]
+    public let objectsTotal: Int
+    public let overrides: [OverrideGroup]
+
+    public enum CodingKeys: String, CodingKey {
+        case kind, headline, notes, objects, overrides
+        case objectsTotal = "objects_total"
+    }
+}
+
+public struct OverviewObject: Decodable, Identifiable {
+    public let tgi: TGI
+    public let name: String
+    public let filename: String
+    public let guid: UInt32
+    public let price: Int
+    public let description: String
+    public let interactions: [String]
+    public let ttab: TGI?
+    public var id: TGI { tgi }
+}
+
+public struct OverrideGroup: Decodable, Identifiable {
+    public let group: UInt32
+    public let label: String
+    public let count: Int
+    public let items: [OverviewItem]
+    public var id: UInt32 { group }
+}
+
+public struct OverviewItem: Decodable, Identifiable {
+    public let tgi: TGI
+    public let typeName: String
+    public let name: String?
+    public var id: TGI { tgi }
+    public enum CodingKeys: String, CodingKey {
+        case tgi, name
+        case typeName = "type_name"
+    }
+}
+
 /// The decompiler's view of a BHAV, rendered by the daemon.
 public struct BhavRender: Decodable {
     public let flat: String?

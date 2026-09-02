@@ -25,6 +25,8 @@ struct TypeTree: View {
 
     var body: some View {
         List(selection: $selection) {
+            Label("Overview", systemImage: "info.circle")
+                .tag(TreeFilter.overview)
             HStack {
                 Label("All Resources", systemImage: "shippingbox")
                 Spacer()

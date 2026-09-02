@@ -792,6 +792,176 @@ def _object_rows(session: Session) -> list:
     return out
 
 
+GLOBAL_GROUP = 0x7FD46CD0
+PRIVATE_GROUP = 0xFFFFFFFF
+# Types that, placed in one of the game's own groups, replace the game's copy.
+_OVERRIDE_TYPES = frozenset({
+    s2object.TYPE_BHAV, s2object.TYPE_BCON, s2object.TYPE_STR, s2object.TYPE_TTAB,
+    s2object.TYPE_TTAS, s2object.TYPE_OBJF, s2object.TYPE_GLOB, s2object.TYPE_SLOT,
+    s2object.TYPE_CTSS, s2object.TYPE_OBJD, 0x54505250, 0x5452434E,
+})
+_MESH_TYPES = frozenset({0xAC4F8687, 0x7BA3838C, 0xFC6EB1F7, 0xE519C933})
+_RECOLOUR_TYPES = frozenset({0xFC4B284B, 0x1C4A276C, 0x49596978, 0xCCA8E925, 0xEBCF3E27})
+_OVERVIEW_OBJECT_CAP = 300
+
+
+def _plural(n: int, one: str, many: "str | None" = None) -> str:
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def _first_str(session: Session, type_id: int, group: int, instance: int) -> "s2object.StrResource | None":
+    """A string table by id, preferring the object's own group, then any."""
+    best = None
+    for r in session.resources:
+        if r.type_id == type_id and r.instance_id == instance:
+            if r.group_id == group:
+                best = r
+                break
+            best = best or r
+    if best is None:
+        return None
+    try:
+        return s2object.parse_str(best.data)
+    except (ValueError, struct.error, IndexError):
+        return None
+
+
+def _tgi_of(r: Resource) -> dict:
+    return s2package.tgi_json(r.tgi())
+
+
+def m_overview(session: Session, params: dict) -> dict:
+    """What the package *is*, in plain words: its kind (object, global mod,
+    mesh, recolour, neighborhood), a one-line headline, the objects it
+    defines with catalog title, price, description and pie-menu entries,
+    and which of the game's own resources it replaces. This is the page a
+    package opens on; the resource table is the parts list behind it.
+    """
+    session.require_open()
+    by_type: "dict[int, int]" = {}
+    for r in session.resources:
+        by_type[r.type_id] = by_type.get(r.type_id, 0) + 1
+
+    def count(*types: int) -> int:
+        return sum(by_type.get(t, 0) for t in types)
+
+    # --- objects, with their catalog text and interactions
+    objects = []
+    own_groups: "set[int]" = set()
+    for n, r in enumerate(session.resources):
+        if r.type_id != s2object.TYPE_OBJD:
+            continue
+        own_groups.add(r.group_id)
+        if len(objects) >= _OVERVIEW_OBJECT_CAP:
+            continue
+        try:
+            o = s2object.parse_objd(r.data)
+        except (ValueError, struct.error):
+            continue
+        title, desc = o.name or o.filename, ""
+        ctss = _first_str(session, s2object.TYPE_CTSS, r.group_id, o.ctss_id)
+        if ctss is not None:
+            vals = ctss.values(1) or ctss.values(None)
+            if vals and vals[0].strip():
+                title = vals[0].strip()
+            if len(vals) > 1:
+                desc = vals[1].strip()
+        interactions: "list[str]" = []
+        ttab_tgi = None
+        ttab = s2package.get(session.resources, (s2object.TYPE_TTAB, r.group_id, o.ttab_id, 0)) \
+            or next((x for x in session.resources
+                     if x.type_id == s2object.TYPE_TTAB and x.instance_id == o.ttab_id), None)
+        if ttab is not None:
+            ttab_tgi = _tgi_of(ttab)
+            try:
+                t = s2object.parse_ttab(ttab.data)
+                names = _first_str(session, s2object.TYPE_TTAS, ttab.group_id, ttab.instance_id)
+                strings = (names.values(1) or names.values(None)) if names else []
+                for e in t.entries:
+                    i = e.ttas_index
+                    label = strings[i].strip() if i < len(strings) else ""
+                    interactions.append(label or f"entry {len(interactions)}")
+            except (ValueError, struct.error, IndexError):
+                interactions = []
+        objects.append({
+            "tgi": _tgi_of(r), "name": title, "filename": o.filename, "guid": o.guid,
+            "price": o.price, "description": desc, "interactions": interactions,
+            "ttab": ttab_tgi,
+        })
+
+    # --- overrides: resources living in one of the game's groups. Not for
+    # the game's own files, where those groups are the originals.
+    is_game = "TSData" in session.path.parts or any(p.endswith(".app") for p in session.path.parts)
+    groups: "dict[int, list]" = {}
+    for r in session.resources:
+        if is_game or r.type_id not in _OVERRIDE_TYPES or r.group_id == PRIVATE_GROUP \
+                or r.group_id in own_groups:
+            continue
+        groups.setdefault(r.group_id, []).append(r)
+    overrides = []
+    for g, items in sorted(groups.items(), key=lambda kv: (kv[0] != GLOBAL_GROUP, -len(kv[1]))):
+        overrides.append({
+            "group": g,
+            "label": "the game's global behaviour" if g == GLOBAL_GROUP else f"game group 0x{g:08X}",
+            "count": len(items),
+            "items": [{"tgi": _tgi_of(r), "type_name": r.type_name,
+                       "name": s2package.resource_name(r)} for r in items[:40]],
+        })
+    n_over = sum(len(v) for v in groups.values())
+
+    # --- kind and headline
+    n_obj = count(s2object.TYPE_OBJD)
+    n_sims = count(s2neighborhood.TID_SDSC)
+    n_mesh = count(0xAC4F8687)
+    n_tex = count(0xFC4B284B, 0x1C4A276C)
+    n_mat = count(0x49596978, 0xCCA8E925)
+    notes: "list[str]" = []
+    if n_sims:
+        kind = "neighborhood"
+        fam = count(0x46414D49)
+        headline = (f"A neighborhood: {_plural(n_sims, 'sim')} in {_plural(fam, 'family', 'families')}. "
+                    "Switch the Mode control to Sims to browse and edit them.")
+    elif n_obj:
+        kind = "object"
+        if n_obj == 1 and objects:
+            o = objects[0]
+            headline = f"An object: {o['name']}" + (f", §{o['price']}" if o["price"] else "") + "."
+        else:
+            headline = f"An object package defining {_plural(n_obj, 'object')}."
+    elif n_over and count(s2object.TYPE_BHAV, s2object.TYPE_BCON):
+        kind = "global mod"
+        headline = (f"A global mod: it replaces {_plural(n_over, 'resource')} of the game's own, "
+                    "changing how the game behaves rather than adding an object.")
+    elif n_mesh:
+        kind = "mesh"
+        headline = f"A mesh package: {_plural(n_mesh, 'mesh', 'meshes')}" + \
+                   (f" and {_plural(n_tex, 'texture')}" if n_tex else "") + "."
+    elif n_tex or n_mat:
+        kind = "recolour"
+        headline = f"A recolour or Body Shop package: {_plural(n_tex, 'texture')}, {_plural(n_mat, 'material')}."
+    else:
+        kind = "other"
+        headline = f"{_plural(len(session.resources), 'resource')} of {_plural(len(by_type), 'type')}."
+
+    if is_game:
+        notes.append("One of the game's own files: everything here is an original, not an override. "
+                     "Tools ▸ Clone Object copies an object out of it into a package of your own.")
+    n_bhav = count(s2object.TYPE_BHAV)
+    if n_bhav:
+        notes.append(f"{_plural(n_bhav, 'behaviour function')} — the SimAntics code that makes it work.")
+    n_txt = count(s2object.TYPE_STR, s2object.TYPE_CTSS, s2object.TYPE_TTAS)
+    if n_txt:
+        notes.append(f"{_plural(n_txt, 'text table')} — every string the game shows for it.")
+    if n_over and kind != "global mod":
+        notes.append(f"It also replaces {_plural(n_over, 'resource')} of the game's own — see Overrides.")
+    if kind == "object" and n_obj > len(objects):
+        notes.append(f"Showing the first {len(objects)} of {n_obj} objects.")
+    if session.readonly:
+        notes.append("This file is read-only here; Save As writes an edited copy elsewhere.")
+    return {"kind": kind, "headline": headline, "notes": notes,
+            "objects": objects, "objects_total": n_obj, "overrides": overrides}
+
+
 def m_objects(session: Session, params: dict) -> dict:
     """Every object definition in the package — what the clone sheet picks from."""
     session.require_open()
@@ -1393,6 +1563,7 @@ METHODS = {
     "status": m_status,
     "index": m_index,
     "names": m_names,
+    "overview": m_overview,
     "meta": m_meta,
     "get_resource": m_get_resource,
     "render_bhav": m_render_bhav,

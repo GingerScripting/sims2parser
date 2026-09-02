@@ -29,7 +29,13 @@ struct ResourceTable: View {
             }
             .width(min: 120, ideal: 240)
             TableColumn("Group", value: \.group) { r in
-                Text(hex8(r.group)).font(.system(.body, design: .monospaced))
+                // The two groups every package uses get words; the rest are
+                // one object's own id and stay hex.
+                switch r.group {
+                case 0xFFFFFFFF: Text("this package").foregroundStyle(.secondary).help(hex8(r.group))
+                case 0x7FD46CD0: Text("global").foregroundStyle(.secondary).help(hex8(r.group))
+                default: Text(hex8(r.group)).font(.system(.body, design: .monospaced))
+                }
             }
             .width(min: 96, ideal: 100)
             TableColumn("Instance", value: \.instance) { r in
