@@ -90,6 +90,31 @@ suite. If a change to the neighborhood readers can't still tell you that Daniel
 Pleasant loves Mary-Sue while she's at −59 and falling, it's wrong. Run the
 extractor over Pleasantview/Strangetown and eyeball known families.
 
+`s2object.py` takes a directory and recurses, so the game's own install or a
+Downloads folder can serve as a wide corpus — several thousand resources
+rather than the few dozen in `sample-packages/`, which holds too few of most
+types to prove a parser on (one GLOB, one SLOT, no TRCN). Use it whenever you
+touch a parser:
+
+```sh
+python3 s2object.py "$HOME/Library/Containers/com.aspyr.sims2.appstore/Data/Library/Application Support/Aspyr/The Sims 2/Downloads"
+```
+
+It separates a parser **declining** a resource from a parser **corrupting**
+one, and only the second fails the run. That distinction is load-bearing, so a
+new parser must `raise ValueError` for a version or length it cannot handle
+rather than guessing — declines are summarised by reason, while a resource that
+parses and then rebuilds differently is a bug and gets named. A run that
+verifies nothing also fails, so an empty result can't read as a pass.
+
+**The wide corpus is not green today, and that is not your change.** Two known
+gaps: `parse_ttab` handles 2 of the 11 TTAB versions in the wild (`TTAB_LAYOUTS`
+has 0x4F and 0x54), and 41 TTAB/OBJD resources parse but do not rebuild
+byte-identically — `CarOwnable_FordEdge.package` loses about 90% of a TTAB, and
+around 21 OBJDs declare a name one byte longer than the resource holds, so the
+parser silently truncates and the builder writes the shorter length back. The
+default `python3 s2object.py` against `sample-packages/` is green.
+
 Both self-tests read donor packages from `sample-packages/`, which is
 **gitignored** — it exists locally but never in a clone. Don't assume CI or a
 fresh checkout can run them.
@@ -179,6 +204,18 @@ for one URL, so every open is deferred by a beat.
 | `make_wants.py` | Regenerates `wants.json` (want GUID → definition) from the game's own `Wants.package` |
 | `sim_browser.py` | Legacy tkinter prototype, superseded by the app. Don't build on it. |
 
+## Adding a resource type
+
+`.claude/skills/decode-resource-type/` is a skill in this repo covering the
+workflow every parser here went through, with `scripts/survey.py` bundling the
+corpus work — count specimens, dump offset-labelled bytes, test a length
+hypothesis against every specimen, verify a registered parser round-trips.
+
+The one step worth not skipping is testing the layout corpus-wide *before*
+writing code. Reading BCON's count as a `u16` rather than a byte fits 561 of
+912 specimens: 61.5% is high enough to look like a near-miss and low enough to
+be a completely wrong reading.
+
 ## Format traps that span files
 
 These have each cost real debugging time and are easy to reintroduce:
@@ -214,6 +251,16 @@ These have each cost real debugging time and are easy to reintroduce:
   self-describing chain of named blocks — the same container the scenegraph
   (CRES/SHPE/GMND/GMDC) uses. The generic reader lives in `s2texture.py`; reuse
   it rather than writing a second one.
+- **Ask the DIR whether a resource is compressed; never sniff for the magic.**
+  A package's DIR lists exactly what is QFS-compressed, and no DIR means
+  nothing is (checked against 4,000 of the game's own packages: the DIR agrees
+  with a sniff on all 3,778 that carry one, and none of the 222 without one
+  hold a compressed resource). Testing bytes 4:6 for `0x10FB` instead is a
+  guess that fails on any stored resource whose payload happens to start with
+  four bytes and then those two — a 4,006-byte resource came back as 9,109,547
+  bytes of garbage. `s2parser.read_dir()` gives the answer; `read_resource`
+  takes it as `compressed=`, and only falls back to sniffing when nothing
+  passes one.
 
 When a format is unknown, the workflow that works is `s2savediff.py`: snapshot,
 change exactly one thing in-game, snapshot again, diff. That's how the Business
