@@ -95,9 +95,18 @@ BROWSER_PLIST='    <key>NSHumanReadableCopyright</key><string>Reads Sims 2 saves
 # Sim Studio registers itself as an editor for .package so Finder can open
 # one into it. Neighborhood saves and the game install still open read-only
 # inside the app; the daemon refuses to write them.
-STUDIO_PLIST='    <key>NSHumanReadableCopyright</key><string>Edits standalone Sims 2 packages. Never writes to a save.</string>
+STUDIO_PLIST='    <key>NSHumanReadableCopyright</key><string>Makes Sims 2 objects. Never writes to a save.</string>
+    <key>CFBundleIconFile</key><string>SimStudio</string>
     <key>CFBundleDocumentTypes</key>
     <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>Sim Studio Object</string>
+            <key>CFBundleTypeRole</key><string>Editor</string>
+            <key>LSHandlerRank</key><string>Owner</string>
+            <key>LSTypeIsPackage</key><true/>
+            <key>LSItemContentTypes</key>
+            <array><string>org.macadmins.sims2.simobject</string></array>
+        </dict>
         <dict>
             <key>CFBundleTypeName</key><string>Sims 2 Package</string>
             <key>CFBundleTypeRole</key><string>Editor</string>
@@ -108,6 +117,17 @@ STUDIO_PLIST='    <key>NSHumanReadableCopyright</key><string>Edits standalone Si
     </array>
     <key>UTExportedTypeDeclarations</key>
     <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>org.macadmins.sims2.simobject</string>
+            <key>UTTypeDescription</key><string>Sim Studio Object</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>com.apple.package</string><string>public.directory</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>simobject</string></array>
+            </dict>
+        </dict>
         <dict>
             <key>UTTypeIdentifier</key><string>org.macadmins.sims2.package</string>
             <key>UTTypeDescription</key><string>Sims 2 Package</string>
@@ -124,7 +144,14 @@ STUDIO_PLIST='    <key>NSHumanReadableCopyright</key><string>Edits standalone Si
 for app in $APPS; do
     case "$app" in
         SimBrowser) build_bundle SimBrowser "Sim Browser" org.macadmins.rebecca.simbrowser "$BROWSER_FILES" "$BROWSER_PLIST" ;;
-        SimStudio)  build_bundle SimStudio  "Sim Studio"  org.macadmins.rebecca.simstudio "$STUDIO_FILES" "$STUDIO_PLIST" ;;
+        SimStudio)
+            build_bundle SimStudio  "Sim Studio"  org.macadmins.rebecca.simstudio "$STUDIO_FILES" "$STUDIO_PLIST"
+            # The icon is drawn once from an SF Symbol (make_icon.swift) and
+            # kept in Resources/; the bundle was signed already, so sign again.
+            [ -f Resources/SimStudio.icns ] || swift make_icon.swift Resources/SimStudio.icns
+            cp Resources/SimStudio.icns "../Sim Studio.app/Contents/Resources/"
+            codesign --force --sign "${SIGN_ID:--}" "../Sim Studio.app" 2>/dev/null
+            ;;
         *) echo "unknown app $app" >&2; exit 2 ;;
     esac
 done

@@ -243,12 +243,17 @@ def apply_identity(resources: "list[Resource]", identity: Identity) -> int:
     for r in resources:
         if r.type_id == s2object.TYPE_CTSS and r.instance_id == master.ctss_id:
             table = s2object.parse_str(r.data)
-            english = [i for i, e in enumerate(table.entries) if e.lang == 1]
-            if english:
-                table.entries[english[0]].value = identity.name
-            if len(english) > 1:
-                table.entries[english[1]].value = identity.description
-            elif english:
+            seen: "dict[int, int]" = {}
+            for e in table.entries:
+                n = seen.get(e.lang, 0)
+                if n == 0:
+                    e.value = identity.name
+                elif n == 1:
+                    e.value = identity.description
+                seen[e.lang] = n + 1
+            if seen.get(1, 0) < 2:
+                if seen.get(1, 0) == 0:
+                    table.entries.append(s2object.StrEntry(1, identity.name))
                 table.entries.append(s2object.StrEntry(1, identity.description))
             new = s2object.build_str(table)
             if new != r.data:

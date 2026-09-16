@@ -22,8 +22,23 @@ struct PackageRoot: View {
         // reappears while the window is first shown, which would restart the
         // daemon. The session shuts it down when the window's state object
         // is released instead.
-        PackageWindow(session: session)
+        Group {
+            if session.phase == .ready && session.isProject {
+                ProjectWindow(session: session)
+            } else {
+                PackageWindow(session: session)
+            }
+        }
             .task { await session.start() }
+            .task {
+                // Headless check: let the window settle, then render it to
+                // a file — whatever it shows. Lives here, on the root that
+                // outlasts the package/project switch, so it is not cut short.
+                guard Launch.snapshot != nil else { return }
+                try? await Task.sleep(nanoseconds: 7_000_000_000)
+                if Task.isCancelled { return }
+                Launch.takeSnapshot(title: session.title)
+            }
             .onOpenURL { url in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { openWindow(value: url) }
             }
@@ -69,13 +84,6 @@ struct PackageWindow: View {
                 content
             }
         }
-        .task {
-            // Headless check: let the package, the sim and its portrait
-            // arrive, then render the window to a file — whatever it shows.
-            guard Launch.snapshot != nil else { return }
-            try? await Task.sleep(nanoseconds: 6_000_000_000)
-            Launch.takeSnapshot(title: session.title)
-        }
         .frame(minWidth: 1180, minHeight: 640)
         .navigationTitle(session.title)
         .navigationSubtitle(folderLabel)
@@ -120,22 +128,9 @@ struct PackageWindow: View {
             if mode == .sims && session.isHood {
                 SimsPane(session: session)
             } else {
-                HStack(spacing: 0) {
-                    TypeTree(rows: session.rows, selection: $filter,
-                             describe: { session.typeDescription($0) })
-                        .frame(width: 240)
-                    Divider()
-                    ResourceTable(session: session, rows: filteredRows,
-                                  onNewResource: { showNewResource = true },
-                                  onSplit: { tool = .split($0) })
-                        .frame(minWidth: 460)
-                    Divider()
-                    DetailPane(session: session, reveal: { tgi in
-                        filter = .all
-                        session.selectedTGIs = [tgi]
-                    })
-                        .frame(minWidth: 440, maxWidth: .infinity)
-                }
+                ResourceBrowser(session: session, filter: $filter, search: search,
+                                onNewResource: { showNewResource = true },
+                                onSplit: { tool = .split($0) })
             }
             Divider()
             statusBar
@@ -206,7 +201,7 @@ struct PackageWindow: View {
         HStack(spacing: 12) {
             Text(session.summary?.version ?? "")
             Spacer()
-            Text("\(filteredRows.count) of \(session.rows.count) resources")
+            Text("\(ResourceBrowser.filtered(session.rows, filter: filter, search: search).count) of \(session.rows.count) resources")
             Text("\(session.summary?.compressedCount ?? 0) compressed")
             if session.busy { ProgressView().controlSize(.small) }
         }
@@ -216,14 +211,46 @@ struct PackageWindow: View {
         .padding(.vertical, 4)
     }
 
+}
+
+/// The three panes of the resource browser: the type tree, the table, and
+/// the detail pane. The package window shows it as its whole content; a
+/// project window shows it behind the Advanced door.
+struct ResourceBrowser: View {
+    @ObservedObject var session: PackageSession
+    @Binding var filter: TreeFilter
+    var search: String = ""
+    var onNewResource: () -> Void = {}
+    var onSplit: ([TGI]) -> Void = { _ in }
+    /// Narrower minimums, for the pane beside a project window's sidebar.
+    var compact = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            TypeTree(rows: session.rows, selection: $filter,
+                     describe: { session.typeDescription($0) })
+                .frame(width: compact ? 200 : 240)
+            Divider()
+            ResourceTable(session: session, rows: Self.filtered(session.rows, filter: filter, search: search),
+                          onNewResource: onNewResource, onSplit: onSplit)
+                .frame(minWidth: compact ? 380 : 460)
+            Divider()
+            DetailPane(session: session, reveal: { tgi in
+                filter = .all
+                session.selectedTGIs = [tgi]
+            })
+                .frame(minWidth: compact ? 360 : 440, maxWidth: .infinity)
+        }
+    }
+
     /// The tree filter, then the search text against the row's name, type
     /// name, and the hex forms of its ids. Sorting is the table's business.
-    private var filteredRows: [ResourceRow] {
+    static func filtered(_ rows: [ResourceRow], filter: TreeFilter, search: String) -> [ResourceRow] {
         let base: [ResourceRow]
         switch filter {
-        case .all, .overview: base = session.rows
-        case .type(let t): base = session.rows.filter { $0.type == t }
-        case .typeGroup(let t, let g): base = session.rows.filter { $0.type == t && $0.group == g }
+        case .all, .overview: base = rows
+        case .type(let t): base = rows.filter { $0.type == t }
+        case .typeGroup(let t, let g): base = rows.filter { $0.type == t && $0.group == g }
         }
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return base }

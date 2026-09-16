@@ -406,6 +406,14 @@ def _summary(session: Session) -> dict:
         "redo_label": session.redo[-1].label if session.redo else None,
     }
     if session.project is not None:
+        # The identity is a view over the resources, so undo and raw edits
+        # show through without any bookkeeping of their own.
+        try:
+            current = s2workshop.read_identity(session.resources)
+            current.guids = session.project.identity.guids or current.guids
+            session.project.identity = current
+        except (ValueError, struct.error):
+            pass
         out["project"] = session.project.summary()
     return out
 
@@ -535,6 +543,9 @@ def m_meta(session: Session, params: dict) -> dict:
                         "no_desc": s2object.STR_FMT_NO_DESC},
         "ttab_layouts": {str(k): {"entry_size": v[0], "ttas_offset": v[1]}
                          for k, v in s2object.TTAB_LAYOUTS.items()},
+        # Buy Mode categories (OBJD words 40 and 39), for the project window.
+        "function_sort": [{"bit": b, "name": n} for b, n in s2catalog.FUNCTION_SORT],
+        "room_sort": [{"bit": b, "name": n} for b, n in s2catalog.ROOM_SORT],
     }
 
 
@@ -1666,9 +1677,12 @@ def m_catalog(session: Session, params: dict) -> dict:
 
 def m_catalog_swatch(session: Session, params: dict) -> dict:
     """One object's swatch as PNG, from the catalog cache or freshly resolved."""
-    entry = s2catalog.CatalogEntry(**{k: params[k] for k in (
-        "guid", "group", "source", "name", "description", "price", "room_flags",
-        "function_flags", "tiles", "model", "swatch", "filename") if k in params})
+    fields = {k: params[k] for k in ("guid", "group", "source", "name", "description", "price",
+                                      "room_flags", "function_flags", "tiles", "model", "swatch",
+                                      "filename") if k in params}
+    for k, v in (("name", ""), ("description", ""), ("price", 0), ("room_flags", 0), ("function_flags", 0)):
+        fields.setdefault(k, v)
+    entry = s2catalog.CatalogEntry(**fields)
     objects = Path(params["objects"]).expanduser() if params.get("objects") else None
     try:
         png = s2catalog.swatch(entry, objects_package=objects)

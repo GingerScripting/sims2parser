@@ -18,11 +18,12 @@ struct SimStudioApp: App {
         // One window per package URL. Not a document-based scene on purpose:
         // FileDocument hands Swift the file's bytes and wants bytes back, and
         // the whole point is that the app never holds any — the daemon does.
-        WindowGroup(for: URL.self) { $url in
+        // A window with no URL is the New Object screen; ⌘N opens another.
+        WindowGroup(id: "studio", for: URL.self) { $url in
             if let url {
                 PackageRoot(url: url)
             } else {
-                WelcomeView()
+                NewObjectView()
             }
         }
         .commands {
@@ -49,6 +50,7 @@ struct StudioCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
+            NewObjectButton()
             OpenPackageButton()
         }
         CommandGroup(replacing: .saveItem) {
@@ -57,7 +59,11 @@ struct StudioCommands: Commands {
                 .disabled(session == nil || session!.isReadonly || !session!.isDirty)
             Button("Save As…") { session.map { SavePanels.saveAs($0) } }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
-                .disabled(session == nil)
+                .disabled(session == nil || session!.isProject)
+            Divider()
+            Button("Export Package…") { session.map { ProjectActions.export($0) } }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(!(session?.isProject ?? false))
         }
         CommandGroup(replacing: .undoRedo) {
             Button(session?.undoLabel ?? "Undo") { Task { await session?.undo() } }
@@ -70,14 +76,29 @@ struct StudioCommands: Commands {
     }
 }
 
-/// File > Open… — needs a View to reach `openWindow`.
+/// File > New Object — a fresh window with no document.
+struct NewObjectButton: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("New Object…") { openWindow(id: "studio") }
+            .keyboardShortcut("n", modifiers: .command)
+    }
+}
+
+/// File > Open… — needs a View to reach `openWindow`. Takes a project or a package.
 struct OpenPackageButton: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("Open Package…") {
+        Button("Open…") {
             let urls = SavePanels.chooseOpen()
-            DispatchQueue.main.async { for url in urls { openWindow(value: url) } }
+            DispatchQueue.main.async {
+                for url in urls {
+                    NSDocumentController.shared.noteNewRecentDocumentURL(url)
+                    openWindow(value: url)
+                }
+            }
         }
         .keyboardShortcut("o", modifiers: .command)
     }
@@ -88,14 +109,44 @@ struct OpenPackageButton: View {
 @MainActor
 enum SavePanels {
     static let packageType: UTType = UTType(filenameExtension: "package") ?? .data
+    /// The project bundle; declared in the app's Info.plist by make_app.sh.
+    static let projectType: UTType = UTType(exportedAs: "org.macadmins.sims2.simobject", conformingTo: .package)
+    static let projectsFolder = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Documents/Sims 2 Objects", isDirectory: true)
 
     static func chooseOpen() -> [URL] {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [packageType]
+        panel.allowedContentTypes = [projectType, packageType]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.message = "Choose a Sims 2 .package to open"
+        panel.treatsFilePackagesAsDirectories = false
+        panel.message = "Choose an object project (.simobject) or a Sims 2 .package"
         return panel.runModal() == .OK ? panel.urls : []
+    }
+
+    static func chooseProjectToOpen() -> URL? {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [projectType]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.directoryURL = projectsFolder
+        panel.message = "Choose an object project"
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    /// Where a new project goes. Defaults to ~/Documents/Sims 2 Objects,
+    /// created on first use; the game's own folders are refused by the daemon.
+    static func chooseProject(named name: String) -> URL? {
+        try? FileManager.default.createDirectory(at: projectsFolder, withIntermediateDirectories: true)
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [projectType]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = name.replacingOccurrences(of: "/", with: "-") + ".simobject"
+        panel.directoryURL = projectsFolder
+        panel.message = "Where to keep the project. Export later writes the .package the game loads."
+        panel.prompt = "Create"
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.pathExtension == "simobject" ? url : url.appendingPathExtension("simobject")
     }
 
     /// Save As: the panel only yields a URL; the daemon writes the file.
@@ -154,6 +205,12 @@ enum Launch {
     /// the editor page.
     static let sim: Int? = ProcessInfo.processInfo.environment["SIMSTUDIO_SIM"].flatMap(Int.init)
     static let tab: SimTab? = ProcessInfo.processInfo.environment["SIMSTUDIO_TAB"].flatMap(SimTab.init(rawValue:))
+    /// `SIMSTUDIO_PAGE=<identity|resources>` picks a project window's page.
+    static let page: String? = ProcessInfo.processInfo.environment["SIMSTUDIO_PAGE"]
+    /// `SIMSTUDIO_PICK=<guid>` selects that catalog object on the New Object
+    /// screen and moves to the naming step, for snapshots.
+    static let pick: UInt32? = ProcessInfo.processInfo.environment["SIMSTUDIO_PICK"]
+        .flatMap { UInt32($0.hasPrefix("0x") ? String($0.dropFirst(2)) : $0, radix: $0.hasPrefix("0x") ? 16 : 10) }
     /// `SIMSTUDIO_SNAPSHOT=/path/out.png` writes the window's contents there
     /// a few seconds after it opens — the way to see the app from a shell
     /// that has no screen-recording permission.
@@ -166,62 +223,27 @@ enum Launch {
         // A sheet is its own window; when one is up, that is what to show.
         let sheet = NSApp.windows.first { $0.isSheet && $0.isVisible }
         guard let window = sheet ?? NSApp.windows.first(where: { $0.title == title && $0.isVisible }) ?? NSApp.keyWindow,
-              let view = window.contentView,
+              let view = window.contentView?.superview ?? window.contentView,
               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
             trace("snapshot: no window titled \(title); windows: "
                   + NSApp.windows.map { "'\($0.title)' visible=\($0.isVisible)" }.joined(separator: ", "))
             return
         }
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
         view.cacheDisplay(in: view.bounds, to: rep)
-        if let png = rep.representation(using: .png, properties: [:]) {
+        // Flatten onto the window colour: the cached rep keeps the window's
+        // transparency, which reads as black wherever nothing was drawn.
+        let flat = NSImage(size: rep.size)
+        flat.lockFocus()
+        (window.backgroundColor ?? .windowBackgroundColor).setFill()
+        NSRect(origin: .zero, size: rep.size).fill()
+        rep.draw(in: NSRect(origin: .zero, size: rep.size))
+        flat.unlockFocus()
+        if let tiff = flat.tiffRepresentation, let out = NSBitmapImageRep(data: tiff),
+           let png = out.representation(using: .png, properties: [:]) {
             try? png.write(to: url)
             trace("snapshot: wrote \(url.path) (\(Int(rep.size.width))x\(Int(rep.size.height)))")
-        }
-    }
-}
-
-struct WelcomeView: View {
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.dismiss) private var dismiss
-    // onAppear fires more than once for a window's root view.
-    @MainActor private static var autoOpened = false
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 56))
-                .foregroundStyle(.secondary)
-            Text("Sim Studio").font(.title)
-            Text("Open a Sims 2 .package to browse and edit its resources.\n"
-                 + "Neighborhood saves and the game's own files open read-only.")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            Button("Open Package…") {
-                let urls = SavePanels.chooseOpen()
-                if !urls.isEmpty { open(urls) }
-            }
-            .keyboardShortcut("o", modifiers: .command)
-        }
-        .padding(40)
-        .frame(minWidth: 480, minHeight: 320)
-        .onOpenURL { url in open([url]) }
-        .onAppear {
-            trace("WelcomeView appeared (autoOpened=\(Self.autoOpened))")
-            if let url = Launch.openURL, !Self.autoOpened {
-                Self.autoOpened = true
-                open([url])
-            }
-        }
-    }
-
-    /// Open package windows and close this empty one. Deferred by a beat:
-    /// calling openWindow inside the first onAppear (or the launch-time
-    /// open-document event) races window creation and yields two windows
-    /// for one URL — seen with SIMSTUDIO_TRACE.
-    private func open(_ urls: [URL]) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            for url in urls { openWindow(value: url) }
-            dismiss()
         }
     }
 }

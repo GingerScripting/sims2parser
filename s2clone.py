@@ -436,24 +436,23 @@ def reidentify_object(resources: list[s2writer.Resource], target: ObjectInfo, *,
 
 def _retitle_ctss(resources: list[s2writer.Resource], ctss_id: int,
                   name: str | None, description: str | None) -> list[str]:
-    """Set the catalog title and description. Entry 0 is the title and entry 1
-    the description, per language; only the English (lang 1) pair is touched."""
+    """Set the catalog title and description: entry 0 is the title and entry
+    1 the description, per language. Every language gets the new text — a
+    custom object has one name, and a player whose game runs in another
+    language would otherwise still see the donor's."""
     warnings: list[str] = []
     for r in resources:
         if r.type_id != s2object.TYPE_CTSS or r.instance_id != ctss_id:
             continue
         table = s2object.parse_str(r.data)
-        english = [i for i, e in enumerate(table.entries) if e.lang == 1]
-        if name is not None and len(english) > 0:
-            table.entries[english[0]].value = name
-        if description is not None and len(english) > 1:
-            table.entries[english[1]].value = description
-        other = {e.lang for e in table.entries if e.lang != 1}
-        if other and name is not None:
-            warnings.append(
-                f'CTSS {ctss_id} also carries language(s) '
-                + ', '.join(str(l) for l in sorted(other))
-                + ' still showing the donor\'s name')
+        seen: dict[int, int] = {}
+        for e in table.entries:
+            n = seen.get(e.lang, 0)
+            if n == 0 and name is not None:
+                e.value = name
+            elif n == 1 and description is not None:
+                e.value = description
+            seen[e.lang] = n + 1
         r.data = s2object.build_str(table)
         return warnings
     warnings.append(f'no CTSS with instance {ctss_id} — catalog text unchanged')

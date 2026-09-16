@@ -243,7 +243,9 @@ def catalog(game_root: "Path | None" = None, *, refresh: bool = False,
             cache = json.loads(cache_file.read_text())
         except (OSError, ValueError):
             cache = {}
-    fresh: dict = {}
+    # Start from what is cached: a caller that scans other folders must not
+    # evict the entries another caller will want next launch.
+    fresh: dict = dict(cache)
     entries: "list[CatalogEntry]" = []
     scanned = 0
     for n, (source, path) in enumerate(sources):
@@ -263,7 +265,7 @@ def catalog(game_root: "Path | None" = None, *, refresh: bool = False,
         entries.extend(CatalogEntry(**row) for row in rows)
     if progress:
         progress(len(sources), len(sources), "")
-    if scanned or set(fresh) != set(cache):
+    if scanned:
         try:
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(fresh))
@@ -481,6 +483,16 @@ def swatch(entry: CatalogEntry, *, objects_package: "Path | None" = None,
             pass
     png = None
     path = (objects_package or OBJECTS_PACKAGE) if entry.source == "game" else Path(entry.source)
+    if entry.source == "game" and not entry.model and path.is_file():
+        # A project knows its base by GUID and group only; the model name is
+        # one STR# away.
+        try:
+            reader = PackageReader(path)
+            m = reader.by_key.get((s2object.TYPE_STR, entry.group, MODEL_STR))
+            if m is not None:
+                entry.model = next((v for v in _english(s2object.parse_str(reader.read(m))) if v), "")
+        except (OSError, ValueError, struct.error):
+            pass
     if path.is_file():
         try:
             png = package_swatch(path, entry.group, textures=entry.source != "game")

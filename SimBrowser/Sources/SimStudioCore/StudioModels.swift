@@ -41,9 +41,11 @@ public struct PackageSummary: Decodable {
     public let canRedo: Bool
     public let undoLabel: String?
     public let redoLabel: String?
+    /// Present when the session is an object project rather than a package.
+    public let project: ProjectInfo?
 
     public enum CodingKeys: String, CodingKey {
-        case path, readonly, version, count, dirty
+        case path, readonly, version, count, dirty, project
         case readonlyReason = "readonly_reason"
         case compressedCount = "compressed_count"
         case canUndo = "can_undo"
@@ -51,6 +53,138 @@ public struct PackageSummary: Decodable {
         case undoLabel = "undo_label"
         case redoLabel = "redo_label"
     }
+}
+
+// MARK: - Object projects and the catalog
+
+/// What the Name & Catalog page edits. Sent back to `project_set` as a
+/// partial object, so only the fields that changed need be present.
+public struct ProjectIdentity: Codable, Equatable {
+    public var name: String
+    public var description: String
+    public var price: Int
+    public var roomFlags: Int
+    public var functionFlags: Int
+    public var guid: UInt32
+
+    public enum CodingKeys: String, CodingKey {
+        case name, description, price, guid
+        case roomFlags = "room_flags"
+        case functionFlags = "function_flags"
+    }
+
+    public init(name: String, description: String, price: Int, roomFlags: Int, functionFlags: Int, guid: UInt32 = 0) {
+        self.name = name
+        self.description = description
+        self.price = price
+        self.roomFlags = roomFlags
+        self.functionFlags = functionFlags
+        self.guid = guid
+    }
+
+    public var json: JSONValue {
+        .object(["name": .string(name), "description": .string(description), "price": .int(price),
+                 "room_flags": .int(roomFlags), "function_flags": .int(functionFlags)])
+    }
+}
+
+public struct ProjectBase: Decodable, Equatable {
+    public let source: String       // "game" or a package path
+    public let guid: UInt32
+    public let group: UInt32
+    public let name: String
+    public var isGame: Bool { source == "game" }
+}
+
+public struct ProjectInfo: Decodable {
+    public let path: String
+    public let name: String
+    public let uuid: String
+    public let base: ProjectBase
+    public let identity: ProjectIdentity
+    public let exported: String?
+    public let installed: String?
+    public let warnings: [String]
+}
+
+/// One buyable object the catalog knows.
+public struct CatalogEntry: Codable, Identifiable, Hashable {
+    public let guid: UInt32
+    public let group: UInt32
+    public let source: String
+    public let name: String
+    public let description: String
+    public let price: Int
+    public let roomFlags: Int
+    public let functionFlags: Int
+    public let tiles: Int
+    public let model: String
+    public let swatch: String
+    public let filename: String
+    public let rooms: [String]
+    public let functions: [String]
+
+    public enum CodingKeys: String, CodingKey {
+        case guid, group, source, name, description, price, tiles, model, swatch, filename, rooms, functions
+        case roomFlags = "room_flags"
+        case functionFlags = "function_flags"
+    }
+
+    public var id: String { "\(source)#\(guid)" }
+    public var isGame: Bool { source == "game" }
+    public var sourceName: String { isGame ? "The Sims 2" : URL(fileURLWithPath: source).lastPathComponent }
+
+    /// The entry as the daemon wants it back for `catalog_swatch`.
+    public var json: JSONValue {
+        .object(["guid": .int(Int(guid)), "group": .int(Int(group)), "source": .string(source),
+                 "name": .string(name), "description": .string(description), "price": .int(price),
+                 "room_flags": .int(roomFlags), "function_flags": .int(functionFlags),
+                 "tiles": .int(tiles), "model": .string(model), "swatch": .string(swatch),
+                 "filename": .string(filename)])
+    }
+}
+
+public struct SortBit: Decodable, Identifiable, Hashable {
+    public let bit: Int
+    public let name: String
+    public var id: Int { bit }
+}
+
+public struct CatalogResult: Decodable {
+    public let entries: [CatalogEntry]
+    public let sources: [String]
+    public let scanned: Int
+    public let cached: Int
+    public let functionSort: [SortBit]
+    public let roomSort: [SortBit]
+
+    public enum CodingKeys: String, CodingKey {
+        case entries, sources, scanned, cached
+        case functionSort = "function_sort"
+        case roomSort = "room_sort"
+    }
+}
+
+public struct SwatchResult: Decodable {
+    public let guid: UInt32
+    public let pngB64: String
+    public enum CodingKeys: String, CodingKey {
+        case guid
+        case pngB64 = "png_b64"
+    }
+}
+
+public struct ExportResult: Decodable {
+    public let file: String
+    public let size: Int?
+    public let summary: PackageSummary
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        file = try c.decode(String.self, forKey: .file)
+        size = try c.decodeIfPresent(Int.self, forKey: .size)
+        summary = try PackageSummary(from: decoder)
+    }
+    enum CodingKeys: String, CodingKey { case file, size }
 }
 
 /// One row of the resource table.
@@ -337,6 +471,8 @@ public struct Meta: Decodable {
     public let objfSlots: [String: String]
     public let strFormats: [String: Int]
     public let ttabLayouts: [String: TtabLayout]
+    public let functionSort: [SortBit]?
+    public let roomSort: [SortBit]?
 
     public struct TtabLayout: Decodable {
         public let entrySize: Int
@@ -359,6 +495,8 @@ public struct Meta: Decodable {
         case objfSlots = "objf_slots"
         case strFormats = "str_formats"
         case ttabLayouts = "ttab_layouts"
+        case functionSort = "function_sort"
+        case roomSort = "room_sort"
     }
 
     public func typeName(_ type: UInt32) -> String {
