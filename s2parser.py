@@ -188,6 +188,26 @@ class ResourceEntry:
 HEADER_MAGIC = b"DBPF"
 HEADER_SIZE = 96
 
+
+def crc24(text: str) -> int:
+    """The game's 24-bit name hash (CRC-24, the OpenPGP polynomial).
+
+    Instance ids of scenegraph resources are `0xFF000000 | crc24(name)` with
+    the name lowercased and suffixed by its type ("telescopecheap_cres"),
+    semi-global groups are `0x7F000000 | crc24("memoryglobals")`, and a
+    custom package's group 0xFFFFFFFF becomes `0x7F000000 | crc24(filename)`
+    when the game loads it. Verified against Sims3D/Objects*.package and the
+    GLOBs in objects.package.
+    """
+    crc = 0xB704CE
+    for b in text.encode('latin-1', 'replace'):
+        crc ^= b << 16
+        for _ in range(8):
+            crc <<= 1
+            if crc & 0x1000000:
+                crc ^= 0x1864CFB
+    return crc & 0xFFFFFF
+
 # Directory of compressed files: the package's own record of which resources
 # are QFS-compressed, and how big each is decompressed. It is the only
 # reliable answer to "is this resource compressed?" — see read_resource.

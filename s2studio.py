@@ -56,9 +56,12 @@ import s2clone
 import s2doctor
 import s2mesh
 import s2object
+import s2catalog
 import s2package
 import s2parser
 import s2profile
+import s2project
+import s2workshop
 import s2texture
 import s2tools
 import s2writer
@@ -270,6 +273,9 @@ class Session:
     bhav_names: "dict[int, str] | None" = None
     # Per-session lookups that are expensive to build (a hood's characters).
     cache: dict = field(default_factory=dict)
+    # Set when the session is an object project: `resources` is then the
+    # built package, `path` the project folder, and Save writes the bundle.
+    project: "s2project.Project | None" = None
 
     # -- history ----------------------------------------------------------
 
@@ -340,26 +346,8 @@ def load(path: Path) -> Session:
     # LazyResource that decompresses when first looked at. The DIR itself is
     # not kept as a resource — the session tracks compression in
     # `compressed`, and write_package rebuilds the DIR from that.
-    resources: "list[Resource]" = []
-    compressed: "set[tuple[int, int, int, int]]" = set()
     try:
-        with open(path, "rb") as f:
-            header = s2parser.parse_header(f)
-            entries = s2parser.parse_index(f, header)
-            version = (header.index_major_version, header.index_minor_version)
-            directory = s2parser.read_dir(f, entries, version) or {}
-            for e in entries:
-                if e.type_id == s2parser.TYPE_DIR:
-                    continue
-                key = (e.type_id, e.group_id, e.instance, e.resource_id)
-                f.seek(e.offset)
-                raw = f.read(e.size)
-                if key in directory:
-                    resources.append(s2package.LazyResource(
-                        e.type_id, e.group_id, e.instance, raw, e.resource_id))
-                    compressed.add(key)
-                else:
-                    resources.append(Resource(e.type_id, e.group_id, e.instance, raw, e.resource_id))
+        header, resources, compressed = s2package.read_lazy(path)
     except (OSError, ValueError, struct.error) as exc:
         raise RpcError("bad_package", f"cannot read {path.name}: {exc}") from None
 
@@ -404,7 +392,7 @@ def _index_row(session: Session, r: Resource) -> dict:
 
 def _summary(session: Session) -> dict:
     h = session.header
-    return {
+    out = {
         "path": str(session.path),
         "readonly": session.readonly,
         "readonly_reason": session.readonly_reason,
@@ -417,6 +405,9 @@ def _summary(session: Session) -> dict:
         "undo_label": session.undo[-1].label if session.undo else None,
         "redo_label": session.redo[-1].label if session.redo else None,
     }
+    if session.project is not None:
+        out["project"] = session.project.summary()
+    return out
 
 
 def _bhav_names(session: Session) -> dict:
@@ -457,7 +448,10 @@ def _write(session: Session, dest: Path) -> None:
 
 
 def m_open(session: Session, params: dict) -> dict:
-    new = load(Path(_need(params, "path")).expanduser())
+    path = Path(_need(params, "path")).expanduser()
+    if path.is_dir() and path.suffix == s2project.EXTENSION:
+        return m_project_open(session, params)
+    new = load(path)
     session.__dict__.update(new.__dict__)
     return _summary(session)
 
@@ -702,6 +696,8 @@ def m_redo(session: Session, params: dict) -> dict:
 
 def m_save(session: Session, params: dict) -> dict:
     session.require_open()
+    if session.project is not None:
+        return m_project_save(session, params)
     if session.readonly:
         raise RpcError("readonly", f"{session.path.name} is read-only: {session.readonly_reason}. "
                        "Use Save As to write a copy elsewhere.",
@@ -713,6 +709,8 @@ def m_save(session: Session, params: dict) -> dict:
 
 def m_save_as(session: Session, params: dict) -> dict:
     session.require_open()
+    if session.project is not None:
+        raise RpcError("bad_params", "a project is not saved as a package; use project_export")
     dest = Path(_need(params, "path")).expanduser()
     reason = protection_reason(dest)
     if reason is not None:
@@ -1634,6 +1632,192 @@ def m_bhav_transform(session: Session, params: dict) -> dict:
     return {"decoded": to_json(b), "warnings": warnings}
 
 
+# ---------------------------------------------------------------------------
+# Object projects and the catalog
+# ---------------------------------------------------------------------------
+
+def _catalog_root(params: dict) -> "Path | None":
+    if params.get("root"):
+        return Path(params["root"]).expanduser()
+    return next((c for c in s2doctor.ROOT_CANDIDATES if (c / "Neighborhoods").is_dir()), None)
+
+
+def m_catalog(session: Session, params: dict) -> dict:
+    """Every buyable object in the game and in Downloads (or in the folders
+    given), with names, prices, categories and swatch hints. Cached per file,
+    so only a changed package is rescanned; progress events while scanning."""
+    kwargs = {}
+    if params.get("objects"):
+        kwargs["objects_package"] = Path(params["objects"]).expanduser()
+    if params.get("downloads"):
+        kwargs["downloads"] = Path(params["downloads"]).expanduser()
+    try:
+        cat = s2catalog.catalog(_catalog_root(params), refresh=bool(params.get("refresh")),
+                                progress=lambda d, t, n: _progress("catalog", d, t, n), **kwargs)
+    except (OSError, ValueError, struct.error) as exc:
+        raise RpcError("catalog_failed", str(exc)) from None
+    return {
+        "entries": [c.to_json() for c in cat["entries"]],
+        "sources": cat["sources"], "scanned": cat["scanned"], "cached": cat["cached"],
+        "function_sort": [{"bit": b, "name": n} for b, n in s2catalog.FUNCTION_SORT],
+        "room_sort": [{"bit": b, "name": n} for b, n in s2catalog.ROOM_SORT],
+    }
+
+
+def m_catalog_swatch(session: Session, params: dict) -> dict:
+    """One object's swatch as PNG, from the catalog cache or freshly resolved."""
+    entry = s2catalog.CatalogEntry(**{k: params[k] for k in (
+        "guid", "group", "source", "name", "description", "price", "room_flags",
+        "function_flags", "tiles", "model", "swatch", "filename") if k in params})
+    objects = Path(params["objects"]).expanduser() if params.get("objects") else None
+    try:
+        png = s2catalog.swatch(entry, objects_package=objects)
+    except (OSError, ValueError, struct.error, IndexError) as exc:
+        raise RpcError("swatch_failed", str(exc)) from None
+    if png is None:
+        raise RpcError("not_found", f"no picture for {entry.name}")
+    return {"guid": entry.guid, "png_b64": base64.b64encode(png).decode("ascii")}
+
+
+def _open_project(session: Session, project: "s2project.Project") -> dict:
+    try:
+        resources = s2project.build(project)
+    except (OSError, ValueError, struct.error) as exc:
+        raise RpcError("build_failed", str(exc)) from None
+    new = Session(path=project.dir, readonly=False, readonly_reason="", header=None,
+                  resources=resources, compressed=set())
+    new.project = project
+    session.__dict__.update(new.__dict__)
+    return _summary(session)
+
+
+def m_project_new(session: Session, params: dict) -> dict:
+    """Start a project from a catalog entry: build it and open it. `path` is
+    the .simobject folder to create; it is written at once so the window
+    has a document from the first moment."""
+    path = Path(_need(params, "path")).expanduser()
+    if path.suffix != s2project.EXTENSION:
+        path = path.with_name(path.name + s2project.EXTENSION)
+    reason = protection_reason(path)
+    if reason is not None:
+        raise RpcError("destination_protected", f"refusing to create {path.name}: {reason}")
+    if path.exists():
+        raise RpcError("exists", f"{path.name} already exists")
+    if not path.parent.is_dir():
+        raise RpcError("not_found", f"no such folder: {path.parent}")
+    base = s2project.Base.from_json(_need(params, "base"))
+    identity = s2workshop.Identity.from_json(params.get("identity") or {})
+    if not identity.name:
+        identity.name = base.name or path.stem
+    project = s2project.new(path, base, identity)
+    result = _open_project(session, project)
+    try:
+        s2project.save(project, session.resources)
+    except (OSError, ValueError, struct.error) as exc:
+        raise RpcError("write_failed", str(exc)) from None
+    session.dirty = False
+    return _summary(session)
+
+
+def m_project_open(session: Session, params: dict) -> dict:
+    path = Path(_need(params, "path")).expanduser()
+    if not (path / s2project.PROJECT_FILE).is_file():
+        raise RpcError("not_found", f"{path.name} is not a Sim Studio object project")
+    try:
+        project = s2project.load(path)
+    except (OSError, ValueError) as exc:
+        raise RpcError("bad_project", str(exc)) from None
+    return _open_project(session, project)
+
+
+def _require_project(session: Session) -> "s2project.Project":
+    session.require_open()
+    if session.project is None:
+        raise RpcError("bad_params", "this window is not an object project")
+    return session.project
+
+
+def m_project_set(session: Session, params: dict) -> dict:
+    """Change the name, description, price or categories, as one undo step."""
+    project = _require_project(session)
+    current = s2workshop.read_identity(session.resources)
+    wanted = params.get("identity") or {}
+    ident = s2workshop.Identity(
+        name=str(wanted.get("name", current.name)),
+        description=str(wanted.get("description", current.description)),
+        price=int(wanted.get("price", current.price)),
+        room_flags=int(wanted.get("room_flags", current.room_flags)),
+        function_flags=int(wanted.get("function_flags", current.function_flags)),
+        guid=current.guid, guids=current.guids)
+    before = [(r.tgi(), s2package.copy(r)) for r in session.resources]
+    try:
+        s2workshop.apply_identity(session.resources, ident)
+    except (ValueError, struct.error) as exc:
+        session.resources[:] = [old for _, old in before]
+        raise RpcError("build_failed", str(exc)) from None
+    changes = []
+    for n, r in enumerate(session.resources):
+        old_tgi, old = before[n]
+        if s2package.same_bytes(old, r):
+            continue
+        changes.append(Change(old_tgi, old, s2package.copy(r), n, False, False))
+    if changes:
+        what = ("Rename" if ident.name != current.name else
+                "Reprice" if ident.price != current.price else
+                "Describe" if ident.description != current.description else "Recategorise")
+        session.push(Step(what, changes))
+    project.identity = ident
+    return {"changed": len(changes), **_summary(session)}
+
+
+def m_project_save(session: Session, params: dict) -> dict:
+    project = _require_project(session)
+    try:
+        s2project.save(project, session.resources)
+    except (OSError, ValueError, struct.error) as exc:
+        raise RpcError("write_failed", str(exc)) from None
+    session.dirty = False
+    return _summary(session)
+
+
+def m_project_export(session: Session, params: dict) -> dict:
+    """Write the package the game will load, wherever the user chose."""
+    project = _require_project(session)
+    dest = Path(_need(params, "path")).expanduser()
+    reason = protection_reason(dest)
+    if reason is not None:
+        raise RpcError("destination_protected", f"refusing to write {dest.name}: {reason}")
+    if not dest.parent.is_dir():
+        raise RpcError("not_found", f"no such folder: {dest.parent}")
+    try:
+        s2project.export(project, session.resources, dest)
+    except (OSError, ValueError) as exc:
+        raise RpcError("write_failed", str(exc)) from None
+    return {**_summary(session), "file": str(dest), "size": dest.stat().st_size}
+
+
+def m_project_install(session: Session, params: dict) -> dict:
+    """Copy the last export (or a fresh one) into the game's Downloads."""
+    project = _require_project(session)
+    root = _game_root(params)
+    exported = Path(project.exported) if project.exported else None
+    if exported is None or not exported.is_file():
+        exported = project.dir / (project.name + ".package")
+        try:
+            s2project.export(project, session.resources, exported)
+        except (OSError, ValueError) as exc:
+            raise RpcError("write_failed", str(exc)) from None
+    try:
+        dest = s2project.install(project, exported, root, replace=bool(params.get("replace")))
+    except FileExistsError as exc:
+        raise RpcError("exists", str(exc)) from None
+    except PermissionError as exc:
+        raise RpcError("write_failed", f"macOS refused access to the game folder: {exc}") from None
+    except (OSError, ValueError) as exc:
+        raise RpcError("write_failed", str(exc)) from None
+    return {**_summary(session), "file": str(dest)}
+
+
 def m_shutdown(session: Session, params: dict) -> dict:
     return {"bye": True}
 
@@ -1677,6 +1861,14 @@ METHODS = {
     "hood_put_srel": m_hood_put_srel,
     "hood_put_tokens": m_hood_put_tokens,
     "hood_sim_portrait": m_hood_sim_portrait,
+    "catalog": m_catalog,
+    "catalog_swatch": m_catalog_swatch,
+    "project_new": m_project_new,
+    "project_open": m_project_open,
+    "project_set": m_project_set,
+    "project_save": m_project_save,
+    "project_export": m_project_export,
+    "project_install": m_project_install,
     "hood_save_as": m_hood_save_as,
     "shutdown": m_shutdown,
 }

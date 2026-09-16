@@ -670,6 +670,7 @@ class Glob:
     semi_global: str
     _name_raw: bytes | None = field(default=None, repr=False)
     _tail: bytes = b''
+    cstring: bool = False       # name stored NUL-terminated, no length byte
 
 
 def parse_glob(data: bytes) -> Glob:
@@ -679,6 +680,15 @@ def parse_glob(data: bytes) -> Glob:
     length = data[64]
     end = 65 + length
     if end > len(data):
+        # A few of the game's own GLOBs skip the length byte and store the
+        # semi-global name as a NUL-terminated string ("CurtainGlobals\0").
+        # 'C' is 67, which is what the "names 67 bytes" failure was.
+        raw = data[64:]
+        if 0x20 <= raw[0] < 0x7F and b'\x00' in raw:
+            name = raw.split(b'\x00', 1)[0]
+            if all(0x20 <= c < 0x7F for c in name):
+                return Glob(_read_name64(data), name.decode('latin-1'),
+                            data[:64], data[64 + len(name) + 1:], cstring=True)
         raise ValueError(
             f"GLOB names {length} bytes but only {len(data) - 65} follow")
     return Glob(_read_name64(data), data[65:end].decode('latin-1'),
@@ -688,6 +698,8 @@ def parse_glob(data: bytes) -> Glob:
 def build_glob(g: Glob) -> bytes:
     """Serialize a Glob. Inverse of parse_glob."""
     raw = g.semi_global.encode('latin-1', 'replace')
+    if g.cstring:
+        return _emit_name64(g.filename, g._name_raw) + raw + b'\x00' + g._tail
     if len(raw) > 0xFF:
         raise ValueError(f"GLOB name is at most 255 bytes, got {len(raw)}")
     return _emit_name64(g.filename, g._name_raw) + bytes((len(raw),)) + raw + g._tail
