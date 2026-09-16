@@ -38,6 +38,7 @@ TID_SREL = 0xCC364C2A
 TID_CTSS = 0x43545353
 TID_STR = 0x53545223
 TID_OBJD = 0x4F424A44
+TID_IMAGE = 0x856DDBAC   # sim portraits inside a character package
 TID_NGBH = s2ngbh.TID_NGBH
 TID_LUA_STATE = s2luastate.TID_LUA_STATE
 
@@ -48,6 +49,12 @@ DEFAULT_ROOT = (
 )
 
 AGE_STAGES = {1: "Baby", 2: "Toddler", 3: "Child", 16: "Teen", 19: "Adult", 51: "Elder"}
+# The life-stage bit flags the game uses elsewhere — in particular as the
+# instance id of a sim's portrait in their character package: the face is
+# stored at the bit, the body shot at the bit << 8, one pair per stage the
+# sim has lived through. Verified against every character file in N002.
+LIFESTAGE_BITS = {"Toddler": 0x01, "Child": 0x02, "Teen": 0x04, "Adult": 0x08,
+                  "Elder": 0x10, "Baby": 0x20, "Young Adult": 0x40}
 ZODIAC = {1: "Aries", 2: "Taurus", 3: "Gemini", 4: "Cancer", 5: "Leo", 6: "Virgo",
           7: "Libra", 8: "Scorpio", 9: "Sagittarius", 10: "Capricorn", 11: "Aquarius",
           12: "Pisces"}
@@ -64,6 +71,11 @@ TIE_FATHER, TIE_MOTHER, TIE_SPOUSE, TIE_SIBLING, TIE_CHILD = 0, 1, 2, 3, 4
 
 PERSONALITY = [(0x6A, "Neat"), (0x6C, "Nice"), (0x6E, "Active"),
                (0x70, "Outgoing"), (0x72, "Playful")]
+# The personality a sim passes on. Equal to PERSONALITY for every sim made in
+# CAS and different for sims born in-game — 527 of 727 records in N002 match,
+# which is how the offsets were found. 0x14, between them, is still unknown.
+GENETIC = [(0x1A, "Neat"), (0x10, "Nice"), (0x12, "Active"),
+           (0x18, "Outgoing"), (0x16, "Playful")]
 SKILLS = [(0x1E, "Cleaning"), (0x20, "Cooking"), (0x22, "Charisma"),
           (0x24, "Mechanical"), (0x2A, "Creativity"), (0x2E, "Body"), (0x30, "Logic")]
 INTERESTS = [(0x104, "Politics"), (0x106, "Money"), (0x108, "Environment"),
@@ -224,6 +236,7 @@ def parse_sdsc(d: bytes) -> dict:
         "body_flags": u16(d, 0xAE),
         "days_left": i16(d, 0xC2),
         "personality": {name: u16(d, off) for off, name in PERSONALITY},
+        "genetic": {name: u16(d, off) for off, name in GENETIC},
         "skills": {name: u16(d, off) for off, name in SKILLS},
         "interests": {name: u16(d, off) for off, name in INTERESTS},
     }
@@ -672,10 +685,17 @@ SDSC_FIELDS = [
     (0xAE, "<H", "body_flags", "int"),
     (0xC2, "<h", "days_left", "int"),
 ] + [(off, "<H", f"personality.{name}", "meter") for off, name in PERSONALITY] \
+  + [(off, "<H", f"genetic.{name}", "meter") for off, name in GENETIC] \
   + [(off, "<H", f"skills.{name}", "meter") for off, name in SKILLS] \
   + [(off, "<H", f"interests.{name}", "meter") for off, name in INTERESTS]
 
 SDSC_MIN_SIZE = 0x1AA
+# Personality, skills and interests nominally run 0–1000 (ten points), but
+# the game itself writes past that — interests reach 1400 from magazines and
+# a maxed skill can sit at 1005 — so build_sdsc keeps whatever a record
+# already holds and refuses only a *new* value outside the range. A stray
+# 5000 cannot reach a save through any caller, and the round-trip stays exact.
+METER_MAX = 1000
 
 # The tables the field kinds refer to, served to the editor by name.
 SDSC_TABLES = {
@@ -710,11 +730,23 @@ def build_sdsc(original: bytes, fields: dict) -> bytes:
             if value != struct.unpack_from(fmt, original, off)[0]:
                 raise ValueError(f"{name} is the sim's identity and cannot be changed")
             continue
+        if (kind == "meter" and not 0 <= int(value) <= METER_MAX
+                and int(value) != struct.unpack_from(fmt, original, off)[0]):
+            raise ValueError(f"{name} must be between 0 and {METER_MAX}, not {value}")
         try:
             struct.pack_into(fmt, out, off, int(value))
         except struct.error as exc:
             raise ValueError(f"{name}: {exc}") from None
     return bytes(out)
+
+
+def household_name(str_data: bytes) -> str:
+    """The household name out of one of the hood's private STR# resources
+    (group 0xFFFFFFFF, instance = family id). This is the name the game
+    shows — "Pleasant", "Tri-Var Sorority" — and the only reliable source
+    of it; a surname vote gets a third of households wrong."""
+    strs = parse_ctss_strings(str_data)
+    return strs[0] if strs and strs[0] else ""
 
 
 # SREL: the relationship record a sim holds about another. Instance id is

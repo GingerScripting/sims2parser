@@ -50,7 +50,7 @@ struct PackageWindow: View {
         case sims = "Sims"
         var id: String { rawValue }
     }
-    @State private var mode: Mode = .resources
+    @State private var mode: Mode = Launch.sim == nil ? .resources : .sims
 
     var body: some View {
         Group {
@@ -68,6 +68,13 @@ struct PackageWindow: View {
             case .ready:
                 content
             }
+        }
+        .task {
+            // Headless check: let the package, the sim and its portrait
+            // arrive, then render the window to a file — whatever it shows.
+            guard Launch.snapshot != nil else { return }
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            Launch.takeSnapshot(title: session.title)
         }
         .frame(minWidth: 1180, minHeight: 640)
         .navigationTitle(session.title)

@@ -603,6 +603,8 @@ public struct HoodMeta: Decodable {
     public let srelTables: [String: [String: String]]
     public let memoryOwnerSlot: Int
     public let memorySubjectSlot: Int
+    /// Career GUID (as a decimal string) → the ten rank titles of that track.
+    public let careerTitles: [String: [String]]?
 
     public enum CodingKeys: String, CodingKey {
         case check
@@ -614,6 +616,14 @@ public struct HoodMeta: Decodable {
         case srelTables = "srel_tables"
         case memoryOwnerSlot = "memory_owner_slot"
         case memorySubjectSlot = "memory_subject_slot"
+        case careerTitles = "career_titles"
+    }
+
+    /// "Science Teacher" for a career GUID at a level (1-based), if known.
+    public func careerTitle(guid: Int, level: Int) -> String? {
+        guard guid != 0, let titles = careerTitles?[String(guid)], (1...titles.count).contains(level) else { return nil }
+        let t = titles[level - 1].trimmingCharacters(in: .whitespaces)
+        return t.isEmpty ? nil : t
     }
 
     /// Sorted (value, label) pairs for an enum/flags table.
@@ -693,15 +703,35 @@ public struct SimDetail: Decodable {
     public let last: String
     public let bio: String
     public let charFile: String
+    /// The household's name as the game shows it ("Pleasant", "Tri-Var Sorority").
+    public let household: String?
+    /// The prose profile the daemon writes from the fields (s2profile.py).
+    public let profile: [String]?
     public let relationships: [Relationship]
     public let tokens: TokenGroup
 
     public enum CodingKeys: String, CodingKey {
-        case nid, tgi, fields, resolved, first, last, bio, relationships, tokens
+        case nid, tgi, fields, resolved, first, last, bio, household, profile, relationships, tokens
         case charFile = "char_file"
     }
 
     public var fullName: String { [first, last].filter { !$0.isEmpty }.joined(separator: " ") }
+    public var profileParagraphs: [String] { profile ?? [] }
+}
+
+/// One of the sim's portraits out of their character package.
+public struct SimPortrait: Decodable {
+    public let nid: Int
+    public let stage: String
+    public let mime: String
+    public let width: Int
+    public let height: Int
+    public let imageB64: String
+
+    public enum CodingKeys: String, CodingKey {
+        case nid, stage, mime, width, height
+        case imageB64 = "image_b64"
+    }
 }
 
 extension TGI: Identifiable {

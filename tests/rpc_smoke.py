@@ -333,6 +333,7 @@ def hood_smoke() -> None:
             info = c.call("open", path=str(hood))
             meta = c.call("hood_meta")
             assert meta["is_hood"] and meta["sdsc_fields"] and meta["sdsc_tables"]["career"]
+            assert any(len(t) == 10 for t in meta["career_titles"].values()), "career titles"
             check = meta["check"]
             assert check is not None and "healthy" in check and check["sdsc_count"] > 0, check
             assert check["summary"].startswith("Token store"), check["summary"]
@@ -343,7 +344,26 @@ def hood_smoke() -> None:
             sim = (named or sims)[0]
             d = c.call("hood_sim", nid=sim["nid"])
             assert d["fields"]["nid"] == sim["nid"] and "skills.Logic" in d["fields"]
+            assert "genetic.Neat" in d["fields"], "genetic personality"
+            assert isinstance(d["profile"], list) and d["profile"], "prose profile"
+            assert isinstance(d["household"], str)
             before = d["fields"]["skills.Logic"]
+            # The portrait lives in the character file; the snapshot may lack one.
+            if (hood.parent / "Characters" / sim["char_file"]).is_file():
+                pic = c.call("hood_sim_portrait", nid=sim["nid"])
+                assert pic["mime"].startswith("image/") and len(pic["image_b64"]) > 100, pic.keys()
+                print(f"portrait: {pic['stage']} face, {len(pic['image_b64']) * 3 // 4} bytes")
+            else:
+                expect_error("not_found", c.call, "hood_sim_portrait", nid=sim["nid"])
+            # A new meter value past the ten-point range is refused, but a
+            # genetic edit inside it goes through and undoes like any other.
+            expect_error("build_failed", c.call, "hood_put_sim", nid=sim["nid"], fields={"skills.Logic": 1001})
+            gen = d["fields"]["genetic.Neat"]
+            r = c.call("hood_put_sim", nid=sim["nid"], fields={"genetic.Neat": 1000 if gen != 1000 else 999})
+            assert r["changed"]
+            assert c.call("hood_sim", nid=sim["nid"])["fields"]["genetic.Neat"] != gen
+            c.call("undo")
+            assert c.call("hood_sim", nid=sim["nid"])["fields"]["genetic.Neat"] == gen
             if d["relationships"]:
                 rel = d["relationships"][0]
                 r = c.call("hood_put_srel", owner=sim["nid"], target=rel["target"],

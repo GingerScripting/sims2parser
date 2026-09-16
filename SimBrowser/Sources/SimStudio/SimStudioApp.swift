@@ -149,6 +149,35 @@ enum Launch {
     /// `SIMSTUDIO_OPEN=/path/to/file.package` opens that file at launch.
     static let openURL: URL? = ProcessInfo.processInfo.environment["SIMSTUDIO_OPEN"]
         .map { URL(fileURLWithPath: $0) }
+    /// `SIMSTUDIO_SIM=<nid>` opens a neighborhood straight into Sims mode
+    /// with that sim selected; `SIMSTUDIO_TAB=<character|skills|…>` picks
+    /// the editor page.
+    static let sim: Int? = ProcessInfo.processInfo.environment["SIMSTUDIO_SIM"].flatMap(Int.init)
+    static let tab: SimTab? = ProcessInfo.processInfo.environment["SIMSTUDIO_TAB"].flatMap(SimTab.init(rawValue:))
+    /// `SIMSTUDIO_SNAPSHOT=/path/out.png` writes the window's contents there
+    /// a few seconds after it opens — the way to see the app from a shell
+    /// that has no screen-recording permission.
+    static let snapshot: URL? = ProcessInfo.processInfo.environment["SIMSTUDIO_SNAPSHOT"]
+        .map { URL(fileURLWithPath: $0) }
+
+    /// Render the window that shows `session` to `snapshot`.
+    @MainActor static func takeSnapshot(title: String) {
+        guard let url = snapshot else { return }
+        // A sheet is its own window; when one is up, that is what to show.
+        let sheet = NSApp.windows.first { $0.isSheet && $0.isVisible }
+        guard let window = sheet ?? NSApp.windows.first(where: { $0.title == title && $0.isVisible }) ?? NSApp.keyWindow,
+              let view = window.contentView,
+              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            trace("snapshot: no window titled \(title); windows: "
+                  + NSApp.windows.map { "'\($0.title)' visible=\($0.isVisible)" }.joined(separator: ", "))
+            return
+        }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        if let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: url)
+            trace("snapshot: wrote \(url.path) (\(Int(rep.size.width))x\(Int(rep.size.height)))")
+        }
+    }
 }
 
 struct WelcomeView: View {

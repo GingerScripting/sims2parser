@@ -58,6 +58,7 @@ import s2mesh
 import s2object
 import s2package
 import s2parser
+import s2profile
 import s2texture
 import s2tools
 import s2writer
@@ -1226,6 +1227,7 @@ import shutil
 
 import hoodcheck
 import s2neighborhood
+import s2ltw
 import s2ngbh
 
 _MEMORY_NAMES: "dict[int, str] | None" = None
@@ -1246,6 +1248,33 @@ def _characters(session: Session) -> dict:
         session.cache["characters"] = (
             s2neighborhood.load_characters(d / "Characters") if d else {})
     return session.cache["characters"]
+
+
+def _household_names(session: Session) -> "dict[int, str]":
+    """family id -> household name, from the hood's private STR# resources.
+    A hood has a few hundred of them and they are tiny, so this is rebuilt
+    per call rather than cached and possibly stale after a STR# edit."""
+    names = {}
+    for r in session.resources:
+        if r.type_id == s2neighborhood.TID_STR and r.group_id == 0xFFFFFFFF:
+            try:
+                name = s2neighborhood.household_name(r.data)
+            except Exception:
+                continue
+            if name:
+                names[r.instance_id] = name
+    return names
+
+
+def _sim_ltw(session: Session, nid: int) -> "dict | None":
+    """The sim's lifetime want out of their SWAF, if the package holds one."""
+    for r in session.resources:
+        if r.type_id == s2ltw.TID_SWAF and r.instance_id == nid:
+            try:
+                return s2ltw.parse_ltw(r.data)
+            except (ValueError, struct.error):
+                return None
+    return None
 
 
 def _memory_names() -> "dict[int, str]":
@@ -1352,6 +1381,9 @@ def m_hood_meta(session: Session, params: dict) -> dict:
                         for k, v in s2neighborhood.SREL_TABLES.items()},
         "memory_owner_slot": s2ngbh.MEMORY_OWNER,
         "memory_subject_slot": s2ngbh.MEMORY_SUBJECT,
+        # Rank titles per career track, so a level shows as "Science Teacher".
+        "career_titles": {str(guid): list(c.get("titles") or [])
+                          for guid, c in s2neighborhood.CAREERS.items()},
     }
 
 
@@ -1412,10 +1444,58 @@ def m_hood_sim(session: Session, params: dict) -> dict:
                 tokens["second"] = _tokens_json(g.second)
         except ValueError as exc:
             tokens["error"] = str(exc)
+    # The sim's own memories and badges, for the prose profile. A token is
+    # this sim's memory when its owner slot holds the nid (gossip about other
+    # sims sits in the same group).
+    own_memories = set()
+    badges = {}
+    for t in tokens["first"] + tokens["second"]:
+        vals = t["values"]
+        if len(vals) > s2ngbh.MEMORY_OWNER and vals[s2ngbh.MEMORY_OWNER] == nid:
+            own_memories.add(t["guid"])
+        badge = s2ngbh.BADGE_TOKENS.get(t["guid"])
+        if badge and vals and vals[0]:
+            badges[badge] = {"points": vals[0], "level": s2ngbh.badge_level(vals[0])}
+    household = _household_names(session).get(resolved["family_id"], "")
+    profile = s2profile.describe(resolved, first=ch.get("first", ""), household=household,
+                                 memory_guids=own_memories if tokens["editable"] else frozenset(),
+                                 badges=badges, ltw=_sim_ltw(session, nid))
     return {"nid": nid, "tgi": s2package.tgi_json(r.tgi()), "fields": fields,
             "resolved": resolved, "first": ch.get("first", ""), "last": ch.get("last", ""),
             "bio": ch.get("bio", ""), "char_file": ch.get("file", ""),
+            "household": household, "profile": profile,
             "relationships": rels, "tokens": tokens}
+
+
+def m_hood_sim_portrait(session: Session, params: dict) -> dict:
+    """The sim's face from their character package: a 256x256 JPEG, the one
+    for their current life stage when the game has rendered it, else the
+    latest stage it has. Read-only — the character file is opened, never
+    written. `not_found` when there is no image."""
+    session.require_open()
+    nid = int(_need(params, "nid"))
+    d = _hood_dir(session)
+    resolved = s2neighborhood.parse_sdsc(_sdsc_resource(session, nid).data)
+    ch = _characters(session).get(resolved["guid"], {})
+    if d is None or not ch.get("file"):
+        raise RpcError("not_found", f"sim {nid} has no character file")
+    path = d / "Characters" / ch["file"]
+    try:
+        _, entries = s2parser.open_package(path)
+    except (OSError, ValueError) as exc:
+        raise RpcError("not_found", f"cannot read {path.name}: {exc}") from None
+    bits = {v: k for k, v in s2neighborhood.LIFESTAGE_BITS.items()}
+    faces = {e.instance: e for e in entries
+             if e.type_id == s2neighborhood.TID_IMAGE and e.instance in bits}
+    if not faces:
+        raise RpcError("not_found", f"{path.name} holds no portrait")
+    want = s2neighborhood.LIFESTAGE_BITS.get(resolved["age"])
+    inst = want if want in faces else max(faces)
+    with open(path, "rb") as f:
+        data = s2parser.read_resource(f, faces[inst])
+    mime = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg"
+    return {"nid": nid, "stage": bits[inst], "mime": mime, "width": 256, "height": 256,
+            "image_b64": base64.b64encode(data).decode("ascii")}
 
 
 def m_hood_put_sim(session: Session, params: dict) -> dict:
@@ -1596,6 +1676,7 @@ METHODS = {
     "hood_put_sim": m_hood_put_sim,
     "hood_put_srel": m_hood_put_srel,
     "hood_put_tokens": m_hood_put_tokens,
+    "hood_sim_portrait": m_hood_sim_portrait,
     "hood_save_as": m_hood_save_as,
     "shutdown": m_shutdown,
 }

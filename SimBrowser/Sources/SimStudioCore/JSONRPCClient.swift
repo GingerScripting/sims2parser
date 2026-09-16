@@ -180,6 +180,7 @@ public final class JSONRPCClient: @unchecked Sendable {   // all mutable state i
 
     private func send(_ method: String, _ params: [String: JSONValue], timeout: TimeInterval) async throws -> Data {
         let started = Date()
+        if Self.tracing { FileHandle.standardError.write(Data("rpc > \(method)\n".utf8)) }
         defer {
             if Self.tracing {
                 FileHandle.standardError.write(Data(String(format: "rpc %@ %.0f ms\n", method,

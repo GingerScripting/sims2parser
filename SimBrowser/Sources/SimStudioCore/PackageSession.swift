@@ -85,9 +85,23 @@ public final class PackageSession: ObservableObject, Identifiable {
 
     // MARK: Lifecycle
 
-    /// Launch the daemon and open the package. Called once from the window.
+    /// Launch the daemon and open the package. Called from the window's
+    /// `.task`, which the window cancels and re-runs while it is first shown
+    /// (the root view appears, disappears, and reappears — see PackageRoot).
+    /// The work therefore runs in a task the session owns: a cancelled
+    /// caller just stops waiting, and the next caller waits on the same run
+    /// instead of finding a half-opened session.
     public func start() async {
         trace("session \(id.uuidString.prefix(8)) start (client \(client == nil ? "nil" : "set"))")
+        if startTask == nil {
+            startTask = Task { @MainActor [self] in await self.performStart() }
+        }
+        await startTask?.value
+    }
+
+    private var startTask: Task<Void, Never>?
+
+    private func performStart() async {
         guard client == nil else { return }
         let python = PythonLocator.interpreter()
         let script = PythonLocator.script("s2studio.py", defaultsKey: "studioPath")
@@ -105,6 +119,7 @@ public final class PackageSession: ObservableObject, Identifiable {
             await loadHoodMeta()
             await loadNames()
         } catch {
+            trace("session \(id.uuidString.prefix(8)) start failed: \(describe(error))")
             phase = .failed("Could not open \(url.lastPathComponent) with \(python) \(script): "
                             + describe(error))
         }
@@ -492,6 +507,15 @@ public final class PackageSession: ObservableObject, Identifiable {
         catch { report(error); return nil }
     }
 
+    /// The sim's face for their current life stage, as image bytes for
+    /// `NSImage(data:)`. Nil when the character file holds none — a normal
+    /// state for a sim the game has never rendered, so it is not reported.
+    public func simPortrait(_ nid: Int) async -> Data? {
+        guard let c = client else { return nil }
+        guard let p = try? await c.call("hood_sim_portrait", ["nid": .int(nid)], as: SimPortrait.self) else { return nil }
+        return Data(base64Encoded: p.imageB64)
+    }
+
     public func putSim(_ nid: Int, fields: [String: Int]) async -> Bool {
         await mutate {
             let r = try await $0.call("hood_put_sim", ["nid": .int(nid),
@@ -563,6 +587,9 @@ public final class PackageSession: ObservableObject, Identifiable {
     }
 
     private func report(_ error: Error) {
+        // A cancelled task is a view that moved on (a new selection, a window
+        // root recreated at launch), not something to tell the user about.
+        if error is CancellationError { return }
         errorMessage = describe(error)
     }
 

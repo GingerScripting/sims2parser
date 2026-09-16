@@ -56,8 +56,18 @@ cd SimBrowser && swift run SimStudioDrive   # drives PackageSession through the 
 ```
 
 Sim Studio can be driven headless when its window can't be seen:
-`SIMSTUDIO_TRACE=1` logs every RPC and detail load to stderr and
-`SIMSTUDIO_OPEN=<file>` opens that package at launch. The editing flow
+`SIMSTUDIO_TRACE=1` logs every RPC and detail load to stderr,
+`SIMSTUDIO_OPEN=<file>` opens that package at launch, `SIMSTUDIO_SIM=<nid>`
+opens a hood straight into Sims mode on that sim, `SIMSTUDIO_TAB=<tab>` picks
+its page, `SIMSTUDIO_PROFILE=1` opens the Profile sheet, and
+`SIMSTUDIO_SNAPSHOT=<out.png>` renders the window to a file a few seconds
+after it opens — the way to see the app from a shell without screen-recording
+permission. Launch with `open -a "Sim Studio.app" --env …`; the process is
+named `SimStudio`, so quit it with `pkill -x SimStudio` (killing it orphans
+its `s2studio.py --serve` child — kill those too). Point `SIMSTUDIO_OPEN` at
+a copy under `/private/tmp`, not `~/Documents`: an ad-hoc-signed build gets
+a new identity every rebuild, so a file under Documents triggers the privacy
+prompt again and the daemon blocks inside `open()` until someone clicks it. The editing flow
 itself is covered by `cd SimBrowser && swift run SimStudioDrive`, a separate
 executable that drives `PackageSession` — the layer every editor button
 calls — against a scratch copy of a donor through the real daemon (select a
