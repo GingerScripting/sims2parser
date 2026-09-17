@@ -79,20 +79,31 @@ public final class CatalogService: ObservableObject {
     /// Create the project bundle at `url` from a base and an identity. On
     /// success the bundle is on disk and this service's daemon is done with
     /// it; open the URL in a window to edit.
-    public func createProject(at url: URL, base: CatalogEntry, identity: ProjectIdentity) async -> Bool {
+    public func createProject(at url: URL, base: CatalogEntry, identity: ProjectIdentity,
+                              kind: ProjectKind = .object, lookName: String? = nil) async -> Bool {
         busy = true
         defer { busy = false }
         do {
             let c = try ensureClient()
             let baseJSON: JSONValue = .object(["source": .string(base.source), "guid": .int(Int(base.guid)),
                                                "group": .int(Int(base.group)), "name": .string(base.name)])
-            _ = try await c.call("project_new", ["path": .string(url.path), "base": baseJSON,
-                                                 "identity": identity.json], as: PackageSummary.self, timeout: 120)
+            var params: [String: JSONValue] = ["path": .string(url.path), "base": baseJSON,
+                                               "identity": identity.json, "kind": .string(kind.rawValue)]
+            if let lookName {
+                params["looks"] = .array([.object(["name": .string(lookName), "default": .bool(false)])])
+            }
+            _ = try await c.call("project_new", params, as: PackageSummary.self, timeout: 120)
             return true
         } catch {
             if !(error is CancellationError) { errorMessage = describe(error) }
             return false
         }
+    }
+
+    /// Which parts of a catalog object a colour option could change.
+    public func recolourable(for entry: CatalogEntry) async -> Recolourable? {
+        guard let c = try? ensureClient() else { return nil }
+        return try? await c.call("catalog_recolourable", entry.json.objectValue ?? [:], as: Recolourable.self, timeout: 120)
     }
 
     public func close() {

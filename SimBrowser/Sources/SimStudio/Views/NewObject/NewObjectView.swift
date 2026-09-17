@@ -18,6 +18,9 @@ struct NewObjectView: View {
     @State private var category: Int? = nil          // a function-sort bit, or nil for all
     @State private var source: Source = .all
     @State private var identity = ProjectIdentity(name: "", description: "", price: 0, roomFlags: 0, functionFlags: 0)
+    @State private var kind: ProjectKind = .object
+    @State private var lookName = ""
+    @State private var recolourable: Recolourable?
     @State private var swatches: [String: NSImage] = [:]
     // onAppear fires more than once for a window's root view.
     @MainActor private static var autoOpened = false
@@ -208,7 +211,28 @@ struct NewObjectView: View {
                             }
                         }
                     }
-                    IdentityForm(identity: $identity, functionSort: catalog.functionSort, roomSort: catalog.roomSort)
+                    SectionCard("Make") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Picker("", selection: $kind) {
+                                Text("A new object based on this").tag(ProjectKind.object)
+                                Text("A new colour for this object").tag(ProjectKind.recolour)
+                            }
+                            .pickerStyle(.radioGroup).labelsHidden()
+                            Text(kindNote).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if kind == .object {
+                        IdentityForm(identity: $identity, functionSort: catalog.functionSort, roomSort: catalog.roomSort)
+                    } else {
+                        SectionCard("Colour option") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                TextField("Name", text: $lookName, prompt: Text("What to call the colour, for you"))
+                                    .textFieldStyle(.roundedBorder)
+                                Text("The game shows it as another swatch on the original object. You pick the picture or tint on the next screen.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                 }
                 .padding(20)
                 .frame(maxWidth: 720, alignment: .leading)
@@ -219,7 +243,23 @@ struct NewObjectView: View {
             if let e = selected, swatches[e.id] == nil, let d = await catalog.swatch(for: e), let img = NSImage(data: d) {
                 swatches[e.id] = img
             }
+            if let e = selected { recolourable = await catalog.recolourable(for: e) }
         }
+    }
+
+    private var kindNote: String {
+        guard let r = recolourable else { return "Checking which parts of this object can be recoloured…" }
+        if r.recolourable.isEmpty {
+            return "This object's look is fixed by the game: no part can be recoloured. A new object based on it still works."
+        }
+        let parts = r.recolourable.joined(separator: ", ")
+        return "Parts a colour can change: \(parts)." + (r.gameOptions > 0 ? " The game has \(r.gameOptions) colour option\(r.gameOptions == 1 ? "" : "s") already." : "")
+    }
+
+    private var canCreate: Bool {
+        if catalog.busy { return false }
+        if kind == .recolour { return recolourable.map { !$0.recolourable.isEmpty } ?? false }
+        return !identity.name.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     // MARK: Footer
@@ -245,7 +285,7 @@ struct NewObjectView: View {
             } else {
                 Button("Create…") { create() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(identity.name.trimmingCharacters(in: .whitespaces).isEmpty || catalog.busy)
+                    .disabled(!canCreate)
             }
         }
         .padding(.horizontal, 20)
@@ -256,13 +296,19 @@ struct NewObjectView: View {
         guard let e = selected else { return }
         identity = ProjectIdentity(name: e.name, description: e.description, price: e.price,
                                    roomFlags: e.roomFlags, functionFlags: e.functionFlags)
+        lookName = ""
+        recolourable = nil
         step = .name
     }
 
     private func create() {
-        guard let e = selected, let url = SavePanels.chooseProject(named: identity.name) else { return }
+        guard let e = selected else { return }
+        let look = lookName.trimmingCharacters(in: .whitespaces)
+        let suggested = kind == .recolour ? "\(e.name) \(look.isEmpty ? "Recolour" : look)" : identity.name
+        guard let url = SavePanels.chooseProject(named: suggested) else { return }
         Task {
-            if await catalog.createProject(at: url, base: e, identity: identity) {
+            if await catalog.createProject(at: url, base: e, identity: identity, kind: kind,
+                                           lookName: kind == .recolour ? (look.isEmpty ? "Colour 1" : look) : nil) {
                 NSDocumentController.shared.noteNewRecentDocumentURL(url)
                 catalog.close()
                 open([url])
