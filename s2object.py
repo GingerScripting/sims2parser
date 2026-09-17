@@ -906,6 +906,406 @@ BHAV_OPERAND_LAYOUTS = {
 }
 
 
+# ---- MMAT: material override (a recolour) -------------------------------------
+
+# A Material Override says: for object GUID g, model m, subset s, draw with
+# material t. It is a binary cGZPropertySet: magic, u16 version 2, u32 count,
+# then count x (u32 type code, u32 key length, key, value). Decoded from the
+# 44 MMATs in the recolour donors and all 2,869 in the game's own
+# Catalog/Materials/Materials.package; every one parses to its exact length.
+# Four different key orders occur across the donors, so order is kept as
+# found and never sorted. The game's bins also carry the XML
+# cGZPropertySetString form of the same record; parse_mmat reads it into
+# the same shape but build_mmat declines it (nothing here writes XML).
+
+TYPE_MMAT = 0x4C697E5A
+TYPE_TXMT = 0x49596978
+
+MMAT_MAGIC = 0xCBE750E0
+PROP_STRING = 0x0B8BEA18
+PROP_UINT32 = 0xEB61E4F7
+PROP_SINT32 = 0x0C264712
+PROP_BOOL = 0xCBA908E1
+PROP_FLOAT = 0xABC78708
+
+# SimPE's order, which is what a new record is written in.
+MMAT_KEY_ORDER = ('creator', 'defaultMaterial', 'family', 'flags', 'materialStateFlags',
+                  'modelName', 'name', 'objectGUID', 'objectStateIndex', 'subsetName', 'type')
+MMAT_KEY_TYPES = {
+    'creator': PROP_STRING, 'defaultMaterial': PROP_BOOL, 'family': PROP_STRING,
+    'flags': PROP_UINT32, 'materialStateFlags': PROP_UINT32, 'modelName': PROP_STRING,
+    'name': PROP_STRING, 'objectGUID': PROP_UINT32, 'objectStateIndex': PROP_SINT32,
+    'subsetName': PROP_STRING, 'type': PROP_STRING, 'copyright': PROP_STRING,
+}
+NO_CREATOR = '00000000-0000-0000-0000-000000000000'
+
+
+@dataclass
+class MmatProp:
+    key: str
+    code: int
+    value: object       # str | int | bool | float by code
+
+
+@dataclass
+class Mmat:
+    entries: list[MmatProp]
+    version: int = 2
+    xml: bool = False           # read from the XML form; cannot be rebuilt here
+
+    def get(self, key: str, default=None):
+        for e in self.entries:
+            if e.key == key:
+                return e.value
+        return default
+
+    def set(self, key: str, value) -> None:
+        for e in self.entries:
+            if e.key == key:
+                e.value = value
+                return
+        code = MMAT_KEY_TYPES.get(key, PROP_STRING)
+        self.entries.append(MmatProp(key, code, value))
+
+    # Typed views, so the editor and the daemon read and write by name.
+    @property
+    def name(self) -> str:
+        return str(self.get('name', ''))
+
+    @name.setter
+    def name(self, v: str) -> None:
+        self.set('name', v)
+
+    @property
+    def family(self) -> str:
+        return str(self.get('family', ''))
+
+    @family.setter
+    def family(self, v: str) -> None:
+        self.set('family', v)
+
+    @property
+    def model_name(self) -> str:
+        return str(self.get('modelName', ''))
+
+    @model_name.setter
+    def model_name(self, v: str) -> None:
+        self.set('modelName', v)
+
+    @property
+    def subset_name(self) -> str:
+        return str(self.get('subsetName', ''))
+
+    @subset_name.setter
+    def subset_name(self, v: str) -> None:
+        self.set('subsetName', v)
+
+    @property
+    def object_guid(self) -> int:
+        return int(self.get('objectGUID', 0))
+
+    @object_guid.setter
+    def object_guid(self, v: int) -> None:
+        self.set('objectGUID', int(v) & 0xFFFFFFFF)
+
+    @property
+    def default_material(self) -> bool:
+        return bool(self.get('defaultMaterial', False))
+
+    @default_material.setter
+    def default_material(self, v: bool) -> None:
+        self.set('defaultMaterial', bool(v))
+
+    @property
+    def material_state_flags(self) -> int:
+        return int(self.get('materialStateFlags', 0))
+
+    @material_state_flags.setter
+    def material_state_flags(self, v: int) -> None:
+        self.set('materialStateFlags', int(v))
+
+    @property
+    def object_state_index(self) -> int:
+        return int(self.get('objectStateIndex', -1))
+
+    @object_state_index.setter
+    def object_state_index(self, v: int) -> None:
+        self.set('objectStateIndex', int(v))
+
+    def __str__(self) -> str:
+        return (f'MMAT guid=0x{self.object_guid:08X} {self.model_name} '
+                f'{self.subset_name} -> {self.name}'
+                + (' (default)' if self.default_material else ''))
+
+
+def parse_mmat(data: bytes) -> Mmat:
+    """Parse a Material Override, binary or XML."""
+    try:
+        return _parse_mmat(data)
+    except (struct.error, IndexError) as exc:
+        raise ValueError(f"MMAT truncated: {exc}") from None
+
+
+def _parse_mmat(data: bytes) -> Mmat:
+    if data[:5] == b'<?xml' or data.lstrip()[:1] == b'<':
+        return _parse_mmat_xml(data)
+    if len(data) < 10:
+        raise ValueError(f"MMAT data too short ({len(data)} bytes)")
+    magic, version, count = struct.unpack_from('<IHI', data, 0)
+    if magic != MMAT_MAGIC:
+        raise ValueError(f"MMAT magic 0x{magic:08X} is not a property set")
+    pos = 10
+    entries: list[MmatProp] = []
+    for _ in range(count):
+        code, klen = struct.unpack_from('<II', data, pos)
+        pos += 8
+        key = data[pos:pos + klen].decode('latin-1', 'replace')
+        pos += klen
+        if code == PROP_STRING:
+            vlen, = struct.unpack_from('<I', data, pos)
+            pos += 4
+            value: object = data[pos:pos + vlen].decode('latin-1', 'replace')
+            pos += vlen
+        elif code == PROP_UINT32:
+            value, = struct.unpack_from('<I', data, pos)
+            pos += 4
+        elif code == PROP_SINT32:
+            value, = struct.unpack_from('<i', data, pos)
+            pos += 4
+        elif code == PROP_BOOL:
+            value = bool(data[pos])
+            pos += 1
+        elif code == PROP_FLOAT:
+            value, = struct.unpack_from('<f', data, pos)
+            pos += 4
+        else:
+            raise ValueError(f"MMAT property {key!r} has unknown type 0x{code:08X}")
+        entries.append(MmatProp(key, code, value))
+    if pos != len(data):
+        raise ValueError(f"MMAT has {len(data) - pos} byte(s) after its {count} properties")
+    return Mmat(entries, version)
+
+
+_XML_TYPES = {'AnyString': PROP_STRING, 'AnyUint32': PROP_UINT32,
+              'AnySint32': PROP_SINT32, 'AnyBoolean': PROP_BOOL, 'AnyFloat32': PROP_FLOAT}
+
+
+def _parse_mmat_xml(data: bytes) -> Mmat:
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(data.decode('utf-8', 'replace'))
+    except ET.ParseError as exc:
+        raise ValueError(f"MMAT XML does not parse: {exc}") from None
+    entries: list[MmatProp] = []
+    for el in root:
+        code = _XML_TYPES.get(el.tag)
+        key = el.get('key')
+        if code is None or key is None:
+            continue
+        text = (el.text or '').strip()
+        if code == PROP_STRING:
+            value: object = text
+        elif code == PROP_BOOL:
+            value = text.lower() in ('1', 'true')
+        elif code == PROP_FLOAT:
+            value = float(text or 0)
+        else:
+            value = int(text or 0, 0)
+        entries.append(MmatProp(key, code, value))
+    if not entries:
+        raise ValueError("MMAT XML holds no properties")
+    return Mmat(entries, 2, xml=True)
+
+
+def build_mmat(m: Mmat) -> bytes:
+    """Serialize a Material Override in the binary form. Inverse of
+    parse_mmat for binary records; an XML-origin record is declined."""
+    if m.xml:
+        raise ValueError("MMAT was read from XML; only the binary form is written")
+    out = bytearray(struct.pack('<IHI', MMAT_MAGIC, m.version, len(m.entries)))
+    for e in m.entries:
+        key = e.key.encode('latin-1', 'replace')
+        out += struct.pack('<II', e.code, len(key)) + key
+        if e.code == PROP_STRING:
+            raw = str(e.value).encode('latin-1', 'replace')
+            out += struct.pack('<I', len(raw)) + raw
+        elif e.code == PROP_UINT32:
+            out += struct.pack('<I', int(e.value) & 0xFFFFFFFF)
+        elif e.code == PROP_SINT32:
+            out += struct.pack('<i', int(e.value))
+        elif e.code == PROP_BOOL:
+            out.append(1 if e.value else 0)
+        elif e.code == PROP_FLOAT:
+            out += struct.pack('<f', float(e.value))
+        else:
+            raise ValueError(f"MMAT property {e.key!r} has unknown type 0x{e.code:08X}")
+    return bytes(out)
+
+
+def new_mmat(*, name: str, model_name: str, subset_name: str, object_guid: int,
+             family: str, default: bool = False, flags: int = 0,
+             material_state_flags: int = 0, object_state_index: int = -1,
+             creator: str = NO_CREATOR) -> Mmat:
+    """A Material Override with the eleven keys every record carries, in
+    SimPE's order."""
+    values = {
+        'creator': creator, 'defaultMaterial': bool(default), 'family': family,
+        'flags': flags, 'materialStateFlags': material_state_flags,
+        'modelName': model_name, 'name': name, 'objectGUID': object_guid & 0xFFFFFFFF,
+        'objectStateIndex': object_state_index, 'subsetName': subset_name,
+        'type': 'modelMaterial',
+    }
+    return Mmat([MmatProp(k, MMAT_KEY_TYPES[k], values[k]) for k in MMAT_KEY_ORDER])
+
+
+# ---- TXMT: material definition ------------------------------------------------
+
+# A TXMT is an RCOL with one cMaterialDefinition block: the header (links and
+# block list), the block name and version, an embedded cSGResource with the
+# resource's own file name, the material name, its shader type (nearly always
+# "StandardMaterial"), a property list of (key, value) strings in the order
+# written, and from block version 8 a list of the texture names the material
+# uses (block version 9 and up; the version-8 SimSkin materials stop after
+# the properties). Every byte is accounted for on 13,156 game materials.
+
+def _pascal(data: bytes, pos: int) -> tuple[str, int]:
+    n = data[pos]
+    if n & 0x80:
+        raise ValueError('multi-byte pascal length not supported')
+    return data[pos + 1:pos + 1 + n].decode('latin-1', 'replace'), pos + 1 + n
+
+
+def _pascal_bytes(text: str) -> bytes:
+    raw = text.encode('latin-1', 'replace')
+    if len(raw) >= 0x80:
+        raise ValueError(f'name too long for a pascal string ({len(raw)} bytes)')
+    return bytes([len(raw)]) + raw
+
+
+@dataclass
+class Txmt:
+    has_magic: bool
+    links: list[tuple[int, int, int, int]]
+    block_ids: list[int]
+    block_name: str
+    block_version: int
+    sg_type: int
+    sg_version: int
+    filename: str                       # "<material>_txmt"
+    material_name: str
+    material_type: str                  # "StandardMaterial"
+    properties: list[list[str]]         # [key, value] pairs, order kept
+    textures: list[str]
+    has_texture_list: bool = True
+
+    def prop(self, key: str, default: str = '') -> str:
+        for k, v in self.properties:
+            if k == key:
+                return v
+        return default
+
+    def set_prop(self, key: str, value: str) -> None:
+        for pair in self.properties:
+            if pair[0] == key:
+                pair[1] = value
+                return
+        self.properties.append([key, value])
+
+    @property
+    def base_texture(self) -> str:
+        return self.prop('stdMatBaseTextureName')
+
+    @base_texture.setter
+    def base_texture(self, v: str) -> None:
+        self.set_prop('stdMatBaseTextureName', v)
+
+    def __str__(self) -> str:
+        return f'TXMT "{self.filename}" {self.material_type} base={self.base_texture}'
+
+
+def parse_txmt(data: bytes) -> Txmt:
+    """Parse a material definition."""
+    try:
+        return _parse_txmt(data)
+    except (struct.error, IndexError) as exc:
+        raise ValueError(f"TXMT truncated: {exc}") from None
+
+
+def _parse_txmt(data: bytes) -> Txmt:
+    if len(data) < 12:
+        raise ValueError(f"TXMT data too short ({len(data)} bytes)")
+    magic, = struct.unpack_from('<I', data, 0)
+    if magic == 0xFFFF0001:
+        count, = struct.unpack_from('<I', data, 4)
+        pos, has_magic = 8, True
+    else:
+        count, pos, has_magic = magic, 4, False
+    if count > 0xFFFF:
+        raise ValueError(f"not an RCOL (leading u32 0x{magic:08X})")
+    links = [tuple(struct.unpack_from('<IIII', data, pos + i * 16)) for i in range(count)]
+    pos += count * 16
+    nblocks, = struct.unpack_from('<I', data, pos)
+    pos += 4
+    block_ids = [struct.unpack_from('<I', data, pos + i * 4)[0] for i in range(nblocks)]
+    pos += nblocks * 4
+    if nblocks != 1:
+        raise ValueError(f"TXMT with {nblocks} blocks")
+    block_name, pos = _pascal(data, pos)
+    _tid, block_version = struct.unpack_from('<II', data, pos)
+    pos += 8
+    _sg, pos = _pascal(data, pos)
+    sg_type, sg_version = struct.unpack_from('<II', data, pos)
+    pos += 8
+    filename, pos = _pascal(data, pos)
+    material_name, pos = _pascal(data, pos)
+    material_type, pos = _pascal(data, pos)
+    nprops, = struct.unpack_from('<I', data, pos)
+    pos += 4
+    props: list[list[str]] = []
+    for _ in range(nprops):
+        k, pos = _pascal(data, pos)
+        v, pos = _pascal(data, pos)
+        props.append([k, v])
+    textures: list[str] = []
+    has_list = block_version >= 9      # version 8 (SimSkin and friends) stops after the properties
+    if has_list:
+        ntex, = struct.unpack_from('<I', data, pos)
+        pos += 4
+        for _ in range(ntex):
+            t, pos = _pascal(data, pos)
+            textures.append(t)
+    if pos != len(data):
+        raise ValueError(f"TXMT has {len(data) - pos} byte(s) after its texture list")
+    return Txmt(has_magic, links, block_ids, block_name, block_version, sg_type,
+                sg_version, filename, material_name, material_type, props, textures,
+                has_list)
+
+
+def build_txmt(t: Txmt) -> bytes:
+    """Serialize a material definition. Inverse of parse_txmt."""
+    out = bytearray()
+    if t.has_magic:
+        out += struct.pack('<I', 0xFFFF0001)
+    out += struct.pack('<I', len(t.links))
+    for link in t.links:
+        out += struct.pack('<IIII', *link)
+    out += struct.pack('<I', len(t.block_ids))
+    for tid in t.block_ids:
+        out += struct.pack('<I', tid)
+    out += _pascal_bytes(t.block_name) + struct.pack('<II', TYPE_TXMT, t.block_version)
+    out += _pascal_bytes('cSGResource') + struct.pack('<II', t.sg_type, t.sg_version)
+    out += _pascal_bytes(t.filename) + _pascal_bytes(t.material_name)
+    out += _pascal_bytes(t.material_type)
+    out += struct.pack('<I', len(t.properties))
+    for k, v in t.properties:
+        out += _pascal_bytes(k) + _pascal_bytes(v)
+    if t.has_texture_list:
+        out += struct.pack('<I', len(t.textures))
+        for name in t.textures:
+            out += _pascal_bytes(name)
+    return bytes(out)
+
+
 # ---- dispatch ----------------------------------------------------------------
 
 # type id -> (parser, builder). STR#/TTAs/CTSS share one string-table format.
@@ -1004,6 +1404,8 @@ PARSERS = {
     TYPE_TTAB: (parse_ttab, build_ttab),
     TYPE_OBJF: (parse_objf, build_objf),
     TYPE_OBJD: (parse_objd, build_objd),
+    TYPE_MMAT: (parse_mmat, build_mmat),
+    TYPE_TXMT: (parse_txmt, build_txmt),
 }
 
 

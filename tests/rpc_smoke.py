@@ -314,6 +314,7 @@ def main() -> int:
 
     hood_smoke()
     project_smoke()
+    looks_smoke()
     print("rpc smoke: OK")
     return 0
 
@@ -504,6 +505,107 @@ def project_smoke() -> None:
             c2.close()
         print("project: catalog, new from the diploma, reprice/undo/redo, raw edit kept as an "
               "override, exported and installed into a scratch root, refusals OK")
+
+
+def looks_smoke() -> None:
+    """Looks on a game object: the counter's subsets, a tint and a picture
+    look through undo, save, export, and a plain recolour project."""
+    import s2catalog
+    import s2texture
+    if not s2catalog.OBJECTS_PACKAGE.is_file():
+        print("skip: the game is not installed, no looks checks")
+        return
+    COUNTER = 0x8C26FB08
+    with tempfile.TemporaryDirectory(prefix="s2studio-looks-") as tmp:
+        tmp = Path(tmp)
+        c = Client()
+        try:
+            c.call("meta")
+            proj_dir = tmp / "Smoke Counter.simobject"
+            r = c.call("project_new", path=str(proj_dir),
+                       base={"source": "game", "guid": COUNTER, "group": 0, "name": "Counter"},
+                       identity={"name": "Smoke Counter", "price": 1})
+            clone_guid = r["project"]["identity"]["guid"]
+            assert r["project"]["kind"] == "object" and r["project"]["model"], r["project"]
+            looks = c.call("project_looks")
+            top = next(s for s in looks["subsets"] if s["name"] == "countertop")
+            assert top["recolourable"] and top["width"] == 256 and top["swatch_png_b64"].startswith("iVBOR"), top
+            assert len(top["states"]) == 2 and looks["game_options"] > 0, top
+            fixed = [s["name"] for s in looks["subsets"] if not s["recolourable"]]
+            assert fixed, "the counter should list a fixed part too"
+            before = c.call("index")["rows"]
+            n_game = sum(1 for row in before if row[0] == 0x4C697E5A)
+            assert n_game == looks["game_options"], (n_game, looks["game_options"])
+            r = c.call("project_look_add", name="Teal")
+            look_id = r["id"]
+            assert r["undo_label"] == "Add Look" and r["project"]["looks"]["items"][0]["name"] == "Teal"
+            r = c.call("project_look_set", id=look_id, subsets={
+                "countertop": {"kind": "tint", "color": "#147890", "strength": 0.8, "lightness": 0.1}})
+            assert r["undo_label"] == "Tint countertop", r["undo_label"]
+            rows = c.call("index")["rows"]
+            kinds = [(row[0], row[1]) for row in rows]
+            assert kinds.count((0x1C4A276C, 0x1C050000)) == 1, "one texture expected"
+            assert kinds.count((0x49596978, 0x1C050000)) == 2, "one material per state expected"
+            assert sum(1 for row in rows if row[0] == 0x4C697E5A) == n_game + 4, "MMAT per GUID and state"
+            c.call("undo")
+            assert len(c.call("index")["rows"]) == len(before), "undo did not remove the look's resources"
+            assert c.call("status")["project"]["looks"]["items"][0]["subsets"] == {}
+            c.call("redo")
+            assert len(c.call("index")["rows"]) == len(rows)
+            png = s2texture.png_bytes(256, 256, bytes([200, 40, 40, 255]) * (256 * 256))
+            r = c.call("project_look_set", id=look_id, default=True, subsets={
+                "countertop": {"kind": "picture", "png_b64": __import__("base64").b64encode(png).decode()}})
+            assert r["undo_label"] == "Change Look", r["undo_label"]
+            bad = s2texture.png_bytes(8, 8, bytes([1, 2, 3, 255]) * 64)
+            expect_error("bad_image", c.call, "project_look_set", id=look_id, subsets={
+                "countertop": {"kind": "picture", "png_b64": __import__("base64").b64encode(bad).decode()}})
+            p = c.call("project_look_preview", subset="countertop",
+                       source={"kind": "tint", "color": "#FF0000", "strength": 1.0, "lightness": 0.0})
+            assert p["png_b64"].startswith("iVBOR")
+            c.call("project_save")
+            assert (proj_dir / "looks" / look_id / "countertop.png").is_file(), "picture not saved"
+            assert not (proj_dir / "overrides").exists(), "generated resources leaked into overrides/"
+            r = c.call("project_export", path=str(tmp / "Smoke Counter.package"))
+            assert Path(r["file"]).is_file()
+            r = c.call("project_looks_set", keep_game_options=False)
+            assert sum(1 for row in c.call("index")["rows"] if row[0] == 0x4C697E5A) == 4
+            c.call("undo")
+            # A plain recolour of the counter.
+            reco_dir = tmp / "Pink Counter.simobject"
+            r = c.call("project_new", path=str(reco_dir), kind="recolour",
+                       base={"source": "game", "guid": COUNTER, "group": 0, "name": "Counter"},
+                       looks=[{"id": "pink0001", "name": "Pink", "default": False,
+                               "subsets": {"countertop": {"kind": "tint", "color": "#F080B0", "strength": 1.0, "lightness": 0}}}])
+            assert r["project"]["kind"] == "recolour"
+            rows = c.call("index")["rows"]
+            assert sorted(row[0] for row in rows) == sorted([0x1C4A276C, 0x49596978, 0x49596978] + [0x4C697E5A] * 4), rows
+            r = c.call("project_export", path=str(tmp / "Pink Counter.package"))
+        finally:
+            c.close()
+        c2 = Client()
+        try:
+            c2.call("meta")
+            r = c2.call("open", path=str(proj_dir))
+            assert r["project"]["looks"]["items"][0]["subsets"]["countertop"]["kind"] == "picture"
+            r = c2.call("open", path=str(tmp / "Smoke Counter.package"))
+            rows = c2.call("index")["rows"]
+            groups = {row[1] for row in rows if row[0] != 0xE86B1EEF}
+            assert groups == {0xFFFFFFFF, 0x1C050000}, {hex(g) for g in groups}
+            mm = next(row for row in rows if row[0] == 0x4C697E5A and row[2] == 0x6000)
+            d = c2.call("get_resource", tgi={"type": mm[0], "group": mm[1], "instance": mm[2], "instance_hi": mm[3]})
+            props = {e["key"]: e["value"] for e in d["decoded"]["entries"]}
+            assert props["objectGUID"] == clone_guid and props["subsetName"] == "countertop", props
+            assert props["name"].startswith("##0x1C050000!") and props["defaultMaterial"] is True, props
+            r = c2.call("open", path=str(tmp / "Pink Counter.package"))
+            rows = c2.call("index")["rows"]
+            mm = next(row for row in rows if row[0] == 0x4C697E5A)
+            d = c2.call("get_resource", tgi={"type": mm[0], "group": mm[1], "instance": mm[2], "instance_hi": mm[3]})
+            props = {e["key"]: e["value"] for e in d["decoded"]["entries"]}
+            assert props["objectGUID"] in (COUNTER, 0xCC7CD58D), props
+        finally:
+            c2.close()
+        print("looks: counter subsets, tint and picture looks through undo, saved pictures, "
+              "clean export, plain recolour project OK")
 
 
 if __name__ == "__main__":

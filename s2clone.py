@@ -28,7 +28,7 @@ The reference graph (every edge confirmed against both donors)
   OBJf slots         -> BHAV instances (slot 0 init, slot 1 main)
   TTAB entries       -> action/guard BHAV instances, and a TTAs string index
   BHAV operands      -> the object's own GUID, embedded as a literal
-  MMAT objectGUID    -> the object a recolour dresses (XML, so exact)
+  MMAT objectGUID    -> the object a recolour dresses (a named property)
 
 That BHAV edge is the one a naive clone misses: rewriting only the OBJD
 leaves those trees driving the *original* object. Both donors do it —
@@ -65,7 +65,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import re
 import struct
 import sys
 from dataclasses import dataclass, field
@@ -75,7 +74,7 @@ import s2object
 import s2parser
 import s2writer
 
-TYPE_MMAT = 0xCCA8E925
+TYPE_MMAT = s2object.TYPE_MMAT
 
 # opcode -> operand byte offset at which that primitive stores an object GUID.
 # Only layouts confirmed against real trees appear here; see the module
@@ -262,32 +261,34 @@ def patch_guid_references(resources: list[s2writer.Resource], old_guid: int,
 # MMAT (recolour / material override)
 # ---------------------------------------------------------------------------
 
-# MMAT is a cGZPropertySetString XML document, so the object reference is a
-# named element rather than a byte offset and can be rewritten exactly.
-_MMAT_OBJECT_GUID = re.compile(
-    br'(<AnyUint32\s+key="objectGUID"[^>]*>)(\d+)(</AnyUint32>)', re.IGNORECASE)
+# An object recolour's MMAT is a binary property set (s2object.Mmat) whose
+# objectGUID names the object it dresses. Floor and wall recolours use a
+# different type (0xCCA8E925, XML) and never reach this function.
 
+def patch_mmat_references(resources: list[s2writer.Resource], new_guid: int,
+                          old_guid: int | None = None) -> tuple[int, int]:
+    """Point the object recolours at the clone instead of the donor.
 
-def patch_mmat_references(resources: list[s2writer.Resource], new_guid: int
-                          ) -> tuple[int, int]:
-    """Point every object recolour at the clone instead of the donor.
-
-    Returns (MMATs seen, objectGUID fields rewritten). Object recolours carry
-    an objectGUID key; floor and wall recolours carry a plain `guid` (their
-    own identity) and are correctly left alone — which is why "seen but none
-    rewritten" is reported rather than treated as success.
+    Rewrites the objectGUID of every MMAT that names `old_guid` (every MMAT
+    when `old_guid` is None) and returns (MMATs seen, MMATs rewritten). A
+    package holding recolours of several objects keeps the others' untouched.
     """
     seen = patched = 0
     for r in resources:
         if r.type_id != TYPE_MMAT:
             continue
         seen += 1
-        data, count = _MMAT_OBJECT_GUID.subn(
-            lambda m: m.group(1) + str(new_guid).encode('ascii') + m.group(3),
-            r.data)
-        if count:
-            r.data = data
-            patched += count
+        try:
+            m = s2object.parse_mmat(r.data)
+        except ValueError:
+            continue
+        if m.xml or (old_guid is not None and m.object_guid != old_guid):
+            continue
+        if m.object_guid == new_guid:
+            continue
+        m.object_guid = new_guid
+        r.data = s2object.build_mmat(m)
+        patched += 1
     return seen, patched
 
 
@@ -348,19 +349,6 @@ def clone(resources: list[s2writer.Resource], *, guid: int,
                                description=description, price=price,
                                aggressive=aggressive)
 
-    # --- recolours, which name the object they dress ---
-    seen, repointed = patch_mmat_references(resources, guid)
-    if repointed:
-        report.warnings.append(
-            f'repointed {repointed} objectGUID field(s) across {seen} MMAT(s) '
-            f'— this path has no donor in sample-packages/ to verify against, '
-            f'so check the clone\'s recolours in the catalog')
-    elif seen:
-        report.warnings.append(
-            f'{seen} MMAT(s) present with no objectGUID field; correct for '
-            f'floor/wall recolours, but if these are object recolours they '
-            f'still point at the donor and need a look')
-
     # --- object instance id, shared by OBJD/OBJf/NREF ---
     if instance is not None and instance != target.instance:
         moved = 0
@@ -420,6 +408,9 @@ def reidentify_object(resources: list[s2writer.Resource], target: ObjectInfo, *,
         for r in resources:
             if r.type_id == s2object.TYPE_NREF and r.instance_id == target.instance:
                 r.data = name.encode('latin-1', 'replace')
+
+    # --- recolours that dress this object ---
+    patch_mmat_references(resources, guid, target.guid)
 
     # --- GUID literals inside behaviour trees ---
     report.patches = patch_guid_references(resources, target.guid, guid,

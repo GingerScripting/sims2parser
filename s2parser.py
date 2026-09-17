@@ -62,8 +62,8 @@ TYPE_NAMES = {
     # graphics / object types common in CC packages
     0x1C4A276C: "TXTR",  # texture resource
     0x49596978: "TXMT",  # material definition
-    0x4C697E5A: "cGZPropertySet",   # binary property list, not an image
-    0xCCA8E925: "MMAT",  # material override
+    0x4C697E5A: "MMAT",  # material override (a recolour): binary cGZPropertySet
+    0xCCA8E925: "XOBJ",  # XML catalog descriptor for floors, walls, fences
     0x44475250: "DGRP",  # draw group
     0x53505232: "SPR2",  # sprites
     0x54505250: "TPRP",  # behaviour function labels (param/local names)
@@ -115,9 +115,9 @@ TYPE_DESCRIPTIONS = {
     0xFC4B284B: "Texture image",
     0x1C4A276C: "Texture image",
     0x49596978: "Material definition",
-    0xCCA8E925: "Material override (recolour)",
+    0xCCA8E925: "Floor/wall descriptor (XML property set)",
     0x0C560F39: "Property set",
-    0x4C697E5A: "Property set",
+    0x4C697E5A: "Material override (recolour)",
     0x44475250: "Draw group (which sprites to show)",
     0x53505232: "Sprites",
     0x54505250: "Behaviour function labels (parameter and local names)",

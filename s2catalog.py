@@ -71,6 +71,10 @@ MODEL_STR = 0x85
 GAME_INSTALL = Path("/Applications/The Sims 2.app/Contents/Assets/TSData/Res")
 OBJECTS_PACKAGE = GAME_INSTALL / "Objects/objects.package"
 SIMS3D_DIR = GAME_INSTALL / "Sims3D"
+BINS_DIR = GAME_INSTALL / "Catalog/Bins"            # expansion scenegraph + XML overrides
+MATERIALS_PACKAGE = GAME_INSTALL / "Catalog/Materials/Materials.package"   # the game's own recolours
+TYPE_GMND = 0x7BA3838C
+TYPE_MMAT = 0x4C697E5A
 CACHE_DIR = Path.home() / "Library/Application Support/SimStudio"
 SWATCH_MAX_SIDE = 256
 
@@ -283,20 +287,23 @@ _SIMS3D: "dict | None" = None
 
 
 def sims3d_index(sims3d_dir: "Path | None" = None) -> "dict":
-    """(type, group, instance) -> (PackageReader, entry) across Sims3D/Objects*.
-    Index-only; built once per process."""
+    """(type, group, instance) -> (PackageReader, entry) across Sims3D/Objects*
+    and the expansion bundles under Catalog/Bins, which hold the later
+    packs' models and textures. Index-only; built once per process."""
     global _SIMS3D
     if _SIMS3D is None:
         idx: dict = {}
         d = sims3d_dir or SIMS3D_DIR
-        if d.is_dir():
-            for p in sorted(d.glob("Objects*.package")):
-                try:
-                    r = PackageReader(p)
-                except (OSError, ValueError, struct.error):
-                    continue
-                for e in r.entries:
-                    idx[(e.type_id, e.group_id, e.instance)] = (r, e)
+        paths = sorted(d.glob("Objects*.package")) if d.is_dir() else []
+        if sims3d_dir is None and BINS_DIR.is_dir():
+            paths += sorted(BINS_DIR.glob("*.bundle.package"))
+        for p in paths:
+            try:
+                r = PackageReader(p)
+            except (OSError, ValueError, struct.error):
+                continue
+            for e in r.entries:
+                idx[(e.type_id, e.group_id, e.instance)] = (r, e)
         _SIMS3D = idx
     return _SIMS3D
 
@@ -342,6 +349,98 @@ def _rcol_links(data: bytes) -> "list[tuple[int, int, int, int]]":
     if count > 0xFFFF:
         return []
     return [struct.unpack_from("<IIII", data, pos + i * 16) for i in range(count)]
+
+
+def scene_find(type_id: int, name: str, local: "list | None" = None) -> "bytes | None":
+    """A scenegraph resource by name: first in `local` (a custom package's
+    own resources, whatever group they use), then in the game's files."""
+    inst = scenegraph_instance(name)
+    if local:
+        for r in local:
+            if r.type_id == type_id and r.instance_id == inst:
+                return r.data
+    return _sg_read(type_id, name)
+
+
+def _pascal_at(data: bytes, pos: int) -> "tuple[str, int]":
+    n = data[pos]
+    return data[pos + 1:pos + 1 + n].decode("latin-1", "replace"), pos + 1 + n
+
+
+def shpe_subsets(data: bytes) -> "list[tuple[str, str]]":
+    """(subset, material) pairs of a SHPE. The list sits after the last
+    `*_gmnd` name: u32 count, then count x (pascal subset, pascal material,
+    9 bytes). Consumes every SHPE in the game exactly (2,686 of 2,686)."""
+    last = -1
+    for s in pascal_strings(data):
+        if s.lower().endswith("_gmnd"):
+            raw = s.encode("latin-1")
+            i = data.rfind(bytes([len(raw)]) + raw)
+            if i >= 0:
+                last = max(last, i + 1 + len(raw))
+    if last < 0:
+        return []
+    pos = last
+    count, = struct.unpack_from("<I", data, pos)
+    pos += 4
+    out = []
+    for _ in range(count):
+        subset, pos = _pascal_at(data, pos)
+        material, pos = _pascal_at(data, pos)
+        pos += 9
+        out.append((subset, material))
+    return out
+
+
+def gmnd_design_subsets(data: bytes) -> "list[str]":
+    """The subsets a GMND marks recolourable: its tsDesignModeEnabled
+    extension is u32 count, then count x (u8 7, pascal subset, u32 0)."""
+    key = b"\x13tsDesignModeEnabled"
+    i = data.find(key)
+    if i < 0:
+        return []
+    pos = i + len(key)
+    count, = struct.unpack_from("<I", data, pos)
+    pos += 4
+    out = []
+    for _ in range(count):
+        if data[pos] != 7:
+            break
+        s, pos = _pascal_at(data, pos + 1)
+        pos += 4
+        out.append(s)
+    return out
+
+
+_MAXIS_MMATS: "dict | None" = None
+
+
+def maxis_mmats() -> "dict[int, list]":
+    """The game's own recolours, objectGUID -> [s2object.Mmat], from
+    Catalog/Materials and the expansion bins. Read once per process; both
+    files parse in under half a second."""
+    global _MAXIS_MMATS
+    if _MAXIS_MMATS is None:
+        import s2package
+        by_guid: dict = {}
+        paths = [MATERIALS_PACKAGE] + (sorted(BINS_DIR.glob("*.bundle.package")) if BINS_DIR.is_dir() else [])
+        for p in paths:
+            if not p.is_file():
+                continue
+            try:
+                _hdr, res, _c = s2package.read_lazy(p)
+            except (OSError, ValueError, struct.error):
+                continue
+            for r in res:
+                if r.type_id != TYPE_MMAT:
+                    continue
+                try:
+                    m = s2object.parse_mmat(r.data)
+                except ValueError:
+                    continue
+                by_guid.setdefault(m.object_guid, []).append(m)
+        _MAXIS_MMATS = by_guid
+    return _MAXIS_MMATS
 
 
 def _texture_png(txtr: bytes, lifo_lookup=None) -> "bytes | None":
