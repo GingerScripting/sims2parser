@@ -10,7 +10,9 @@ import SimKit
 struct SimsPane: View {
     @ObservedObject var session: PackageSession
     @State private var search = ""
-    @State private var selected: Int?
+    @State private var selected: Int? = Launch.sim
+    // Held here, not in SimEditor, so the tab survives picking another sim.
+    @State private var tab: SimTab = Launch.tab ?? .overview
 
     private var filtered: [SimRow] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
@@ -54,7 +56,7 @@ struct SimsPane: View {
             Group {
                 if let nid = selected {
                     IsolatedPane {
-                        SimEditor(session: session, nid: nid)
+                        SimEditor(session: session, nid: nid, tab: $tab)
                     }
                     .id(nid)
                     .clipped()
@@ -69,22 +71,21 @@ struct SimsPane: View {
     }
 }
 
-/// One sim: profile fields, relationships, and the token group.
+/// One sim, laid out like SimPE's Sim Description plugin: a header with the
+/// portrait and a Profile button, an icon tab strip, and one page per tab.
+/// The draft of the SDSC fields is shared by every form tab, so edits made
+/// on Character and Skills go through one Apply.
 struct SimEditor: View {
     @ObservedObject var session: PackageSession
     let nid: Int
-
-    enum Tab: String, CaseIterable, Identifiable {
-        case profile = "Profile"
-        case relationships = "Relationships"
-        case memories = "Memories"
-        var id: String { rawValue }
-    }
+    @Binding var tab: SimTab
 
     @State private var detail: SimDetail?
-    @State private var tab: Tab = .profile
     @State private var draft: [String: Int] = [:]
     @State private var loading = false
+    @State private var portrait: NSImage?
+    // `SIMSTUDIO_PROFILE=1` opens the Profile sheet at launch, for snapshots.
+    @State private var showProfile = ProcessInfo.processInfo.environment["SIMSTUDIO_PROFILE"] != nil
 
     private var meta: HoodMeta? { session.hoodMeta }
     private var changed: [String: Int] {
@@ -96,11 +97,19 @@ struct SimEditor: View {
         VStack(spacing: 0) {
             if let d = detail {
                 header(d)
+                SimTabStrip(selection: $tab)
                 Divider()
                 switch tab {
-                case .profile: profile(d)
-                case .relationships: RelationshipsView(session: session, detail: d, meta: meta)
+                case .relations: RelationshipsView(session: session, detail: d, meta: meta)
                 case .memories: TokensView(session: session, detail: d, meta: meta)
+                default:
+                    if let meta {
+                        SimFieldsTab(tab: tab, detail: d, meta: meta, draft: $draft)
+                        Divider()
+                        footer(d)
+                    } else {
+                        ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             } else if loading {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -110,6 +119,9 @@ struct SimEditor: View {
             }
         }
         .task(id: nid) { await load() }
+        .sheet(isPresented: $showProfile) {
+            if let d = detail { SimProfileSheet(detail: d, portrait: portrait) }
+        }
     }
 
     private func load() async {
@@ -117,128 +129,57 @@ struct SimEditor: View {
         detail = await session.sim(nid)
         draft = detail?.fields ?? [:]
         loading = false
+        if let data = await session.simPortrait(nid) { portrait = NSImage(data: data) }
     }
 
     private func header(_ d: SimDetail) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(d.fullName.isEmpty ? "Sim #\(d.nid)" : d.fullName).font(.title3).fontWeight(.semibold)
+        HStack(alignment: .top, spacing: 12) {
+            PortraitView(image: portrait, size: 56)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(d.fullName.isEmpty ? "Sim #\(d.nid)" : d.fullName).font(.title3).fontWeight(.semibold)
+                    if let h = d.household, !h.isEmpty {
+                        Text("· \(h) household").foregroundStyle(.secondary)
+                    }
+                }
                 Text("nid \(d.nid) · GUID \(hex8(UInt32(truncatingIfNeeded: d.fields["guid"] ?? 0)))")
                     .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-                Spacer()
-                Picker("", selection: $tab) {
-                    ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
+                if !d.charFile.isEmpty {
+                    Text(d.charFile).font(.caption).foregroundStyle(.tertiary)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 300)
             }
-            if !d.charFile.isEmpty {
-                Text(d.charFile).font(.caption).foregroundStyle(.tertiary)
+            Spacer()
+            Button {
+                showProfile = true
+            } label: {
+                Label("Profile", systemImage: "text.book.closed")
             }
+            .help("The sim's portrait and a written profile")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }
 
-    // MARK: Profile
-
-    private func profile(_ d: SimDetail) -> some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let meta {
-                        section("Identity", fields: meta.sdscFields.filter { $0.section == "profile" && $0.kind == "id" }, meta: meta)
-                        section("Profile", fields: meta.sdscFields.filter { $0.section == "profile" && $0.kind != "id" }, meta: meta)
-                        section("Personality", fields: meta.sdscFields.filter { $0.section == "personality" }, meta: meta)
-                        section("Skills", fields: meta.sdscFields.filter { $0.section == "skills" }, meta: meta)
-                        section("Interests", fields: meta.sdscFields.filter { $0.section == "interests" }, meta: meta)
-                    }
-                    if !d.bio.isEmpty {
-                        SectionCard("Bio") { Text(d.bio).textSelection(.enabled) }
-                    }
-                }
-                .padding(16)
+    private func footer(_ d: SimDetail) -> some View {
+        HStack {
+            if !changed.isEmpty {
+                Text("\(changed.count) unapplied change\(changed.count == 1 ? "" : "s")")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Divider()
-            HStack {
-                if !changed.isEmpty {
-                    Text("\(changed.count) unapplied change\(changed.count == 1 ? "" : "s")")
-                        .font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button("Revert") { draft = d.fields }.disabled(changed.isEmpty)
+            Button("Apply") {
+                let edits = changed
+                Task {
+                    if await session.putSim(nid, fields: edits) { await load() }
                 }
-                Spacer()
-                Button("Revert") { draft = d.fields }.disabled(changed.isEmpty)
-                Button("Apply") {
-                    let edits = changed
-                    Task {
-                        if await session.putSim(nid, fields: edits) { await load() }
-                    }
-                }
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(changed.isEmpty || session.busy)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(changed.isEmpty || session.busy)
+            .help("Send the edit to the package in memory (⌘↩). Copy Hood writes it to disk.")
         }
-    }
-
-    private func section(_ title: String, fields: [FieldDef], meta: HoodMeta) -> some View {
-        SectionCard(title) {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(fields) { f in
-                    fieldRow(f, meta: meta)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func fieldRow(_ f: FieldDef, meta: HoodMeta) -> some View {
-        let binding = Binding<Int>(get: { draft[f.name] ?? 0 }, set: { draft[f.name] = $0 })
-        switch true {
-        case f.kind == "id":
-            LabeledContent(f.label) {
-                Text(f.name == "guid" ? hex8(UInt32(truncatingIfNeeded: binding.wrappedValue)) : "\(binding.wrappedValue)")
-                    .font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
-            }
-        case f.kind == "meter":
-            LabeledContent(f.label) {
-                HStack {
-                    Slider(value: Binding(get: { Double(binding.wrappedValue) },
-                                          set: { binding.wrappedValue = Int($0) }), in: 0...1000, step: 1)
-                        .frame(width: 200)
-                    NumberField(value: binding, width: 64)
-                }
-            }
-        case f.kind == "bool":
-            Toggle(f.label, isOn: Binding(get: { binding.wrappedValue != 0 }, set: { binding.wrappedValue = $0 ? 1 : 0 }))
-        case f.isEnum:
-            LabeledContent(f.label) {
-                let opts = meta.options(f.table ?? "", from: meta.sdscTables)
-                Picker("", selection: binding) {
-                    if !opts.contains(where: { $0.value == binding.wrappedValue }) {
-                        Text(binding.wrappedValue == 0 ? "none" : String(format: "0x%X (unknown)", binding.wrappedValue))
-                            .tag(binding.wrappedValue)
-                    }
-                    ForEach(opts, id: \.value) { o in Text(o.label).tag(o.value) }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 320)
-            }
-        case f.isFlags:
-            LabeledContent(f.label) {
-                let opts = meta.options(f.table ?? "", from: meta.sdscTables).sorted { $0.value < $1.value }
-                FlowLayout(spacing: 8) {
-                    ForEach(opts, id: \.value) { o in
-                        Toggle(o.label, isOn: Binding(
-                            get: { binding.wrappedValue & o.value != 0 },
-                            set: { binding.wrappedValue = $0 ? binding.wrappedValue | o.value : binding.wrappedValue & ~o.value }))
-                        .toggleStyle(.checkbox)
-                    }
-                }
-            }
-        default:
-            LabeledContent(f.label) { NumberField(value: binding, width: 90) }
-        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 }
 

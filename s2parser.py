@@ -68,6 +68,9 @@ TYPE_NAMES = {
     0x53505232: "SPR2",  # sprites
     0x54505250: "TPRP",  # behaviour function labels (param/local names)
     0x5452434E: "TRCN",  # behaviour constant labels
+    0x856DDBAC: "IMG",   # JPEG/PNG image; a character package holds the sim's
+                         # portraits here, instance = life-stage bit (face)
+                         # or that bit << 8 (body)
 }
 
 # What each type is for, in the words SimPE's type list uses. Served to the
@@ -76,6 +79,7 @@ TYPE_DESCRIPTIONS = {
     0x42434F4E: "Behaviour constants (tuning numbers)",
     0x42484156: "Behaviour function (SimAntics code)",
     0x424D505F: "Bitmap image",
+    0x856DDBAC: "Image (JPEG or PNG; sim portraits in character files)",
     0x43545353: "Catalog description (name and description text)",
     0x46414D49: "Family information",
     0x46434E53: "Function constants (global tuning)",
@@ -183,6 +187,26 @@ class ResourceEntry:
 
 HEADER_MAGIC = b"DBPF"
 HEADER_SIZE = 96
+
+
+def crc24(text: str) -> int:
+    """The game's 24-bit name hash (CRC-24, the OpenPGP polynomial).
+
+    Instance ids of scenegraph resources are `0xFF000000 | crc24(name)` with
+    the name lowercased and suffixed by its type ("telescopecheap_cres"),
+    semi-global groups are `0x7F000000 | crc24("memoryglobals")`, and a
+    custom package's group 0xFFFFFFFF becomes `0x7F000000 | crc24(filename)`
+    when the game loads it. Verified against Sims3D/Objects*.package and the
+    GLOBs in objects.package.
+    """
+    crc = 0xB704CE
+    for b in text.encode('latin-1', 'replace'):
+        crc ^= b << 16
+        for _ in range(8):
+            crc <<= 1
+            if crc & 0x1000000:
+                crc ^= 0x1864CFB
+    return crc & 0xFFFFFF
 
 # Directory of compressed files: the package's own record of which resources
 # are QFS-compressed, and how big each is decompressed. It is the only

@@ -47,6 +47,7 @@ Patched by operand offset, per primitive, for the layouts confirmed here:
 
   0x001F Set to Next        operand bytes 1-4
   0x0020 Test Object Type   operand bytes 1-4
+  0x002A Create New Object  operand bytes 1-4  (the game's multi-tile masters)
   0x0033 Manage Inventory   operand bytes 6-9  (matches inv_ops in s2object)
 
 Other primitives take GUIDs too (Create New Object Instance, Find Best
@@ -76,17 +77,16 @@ import s2writer
 
 TYPE_MMAT = 0xCCA8E925
 
-# Instruction layout, shared with s2parser.parse_bhav.
-_INSTR_SIZE = 23
-_OPERAND_OFFSET = 6
-_OPERAND_LEN = 16
-_INSTR_START = {0x8007: 76, 0x8009: 77}
-
 # opcode -> operand byte offset at which that primitive stores an object GUID.
-# Only layouts confirmed against a donor appear here; see the module docstring.
+# Only layouts confirmed against real trees appear here; see the module
+# docstring. 0x002A was confirmed on the game's own multi-tile objects, whose
+# masters create their tiles by GUID: across objects.package the sibling
+# GUIDs of a group land at exactly these four slots (45 hits at 0x002A+1,
+# 128 at 0x0020+1, 41 at 0x001F+1, 4 at 0x0033+6) and nowhere else.
 GUID_OPERANDS = {
     0x001F: 1,   # Set to Next
     0x0020: 1,   # Test Object Type
+    0x002A: 1,   # Create New Object Instance
     0x0033: 6,   # Manage Inventory
 }
 
@@ -195,19 +195,24 @@ class GuidPatch:
 
 
 def _iter_instructions(data: bytes):
-    """Yield (index, opcode, absolute operand offset) for a raw BHAV."""
+    """Yield (index, opcode, absolute operand offset, operand length) for a
+    raw BHAV of any format s2parser knows. The game's own trees are mostly
+    0x8000–0x8006 (one-byte branch targets, sometimes 8 operand bytes); a
+    GUID at operand +1..+4 fits every one of them."""
     if len(data) < 72:
         return
     version, count = struct.unpack_from('<HH', data, 64)
-    start = _INSTR_START.get(version)
-    if start is None:
+    layout = s2parser.BHAV_LAYOUTS.get(version)
+    if layout is None:
         return
+    start = 72 + layout.extra_header
+    ops_offset = 2 + 2 * layout.addr_width
     for i in range(count):
-        pos = start + i * _INSTR_SIZE
-        if pos + _INSTR_SIZE > len(data):
+        pos = start + i * layout.instr_size
+        if pos + layout.instr_size > len(data):
             return
         opcode, = struct.unpack_from('<H', data, pos)
-        yield i, opcode, pos + _OPERAND_OFFSET
+        yield i, opcode, pos + ops_offset, layout.operand_len
 
 
 def patch_guid_references(resources: list[s2writer.Resource], old_guid: int,
@@ -230,8 +235,8 @@ def patch_guid_references(resources: list[s2writer.Resource], old_guid: int,
         name = bytes(data[:64]).split(b'\x00', 1)[0].decode('latin-1', 'replace')
         touched = False
 
-        for index, opcode, ops_at in _iter_instructions(bytes(data)):
-            operands = bytes(data[ops_at:ops_at + _OPERAND_LEN])
+        for index, opcode, ops_at, ops_len in _iter_instructions(bytes(data)):
+            operands = bytes(data[ops_at:ops_at + ops_len])
             known_at = GUID_OPERANDS.get(opcode)
             search = 0
             while True:
@@ -339,47 +344,9 @@ def clone(resources: list[s2writer.Resource], *, guid: int,
             f'{len(objects)} objects in this package; pick one with '
             '--of-guid: ' + ', '.join(f'0x{o.guid:08X}' for o in objects))
 
-    report = CloneReport(target.guid, guid, len(resources))
-    if guid == target.guid:
-        raise ValueError('new GUID is identical to the donor\'s — that is the '
-                         'collision cloning exists to avoid')
-
-    # --- OBJD: the identity itself ---
-    objd_res = resources[target.objd_index]
-    objd = s2object.parse_objd(objd_res.data)
-    mirrored_job_guid = (objd.job_guid == target.guid)
-    objd.guid = guid
-    objd.original_guid = target.guid
-    if mirrored_job_guid:
-        objd.job_guid = guid
-    if price is not None:
-        objd.price = price
-    if name is not None:
-        objd.filename = name
-        objd.name = name
-    objd_res.data = s2object.build_objd(objd)
-
-    # --- catalog text ---
-    if name is not None or description is not None:
-        report.warnings.extend(
-            _retitle_ctss(resources, target.ctss_id, name, description))
-
-    # --- NREF: the object's name token, keyed to the object instance ---
-    if name is not None:
-        for r in resources:
-            if r.type_id == s2object.TYPE_NREF and r.instance_id == target.instance:
-                r.data = name.encode('latin-1', 'replace')
-
-    # --- GUID literals inside behaviour trees ---
-    report.patches = patch_guid_references(resources, target.guid, guid,
-                                           aggressive=aggressive)
-    for p in report.patches:
-        if not p.applied:
-            report.warnings.append(
-                f'BHAV 0x{p.instance:04X} "{p.bhav_name}" instr[{p.instr_index}] '
-                f'holds the old GUID at an unconfirmed operand offset '
-                f'(+{p.operand_offset}, opcode 0x{p.opcode:04X}) and was left '
-                f'alone; check it by hand or re-run with --aggressive')
+    report = reidentify_object(resources, target, guid=guid, name=name,
+                               description=description, price=price,
+                               aggressive=aggressive)
 
     # --- recolours, which name the object they dress ---
     seen, repointed = patch_mmat_references(resources, guid)
@@ -410,26 +377,82 @@ def clone(resources: list[s2writer.Resource], *, guid: int,
     return report
 
 
+def reidentify_object(resources: list[s2writer.Resource], target: ObjectInfo, *,
+                      guid: int, name: str | None = None,
+                      description: str | None = None, price: int | None = None,
+                      room_flags: int | None = None,
+                      function_flags: int | None = None,
+                      aggressive: bool = False) -> CloneReport:
+    """Give one object a new identity: its OBJD, catalog text, NREF, and the
+    GUID literals in the trees that mention it. The building block `clone`
+    and the Object Workshop share; it touches nothing outside the object."""
+    report = CloneReport(target.guid, guid, len(resources))
+    if guid == target.guid:
+        raise ValueError('new GUID is identical to the donor\'s — that is the '
+                         'collision cloning exists to avoid')
+
+    # --- OBJD: the identity itself ---
+    objd_res = resources[target.objd_index]
+    objd = s2object.parse_objd(objd_res.data)
+    mirrored_job_guid = (objd.job_guid == target.guid)
+    objd.guid = guid
+    objd.original_guid = target.guid
+    if mirrored_job_guid:
+        objd.job_guid = guid
+    if price is not None:
+        objd.price = price
+    if room_flags is not None:
+        objd.room_sort_flags = room_flags
+    if function_flags is not None:
+        objd.function_sort_flags = function_flags
+    if name is not None:
+        objd.filename = name
+        objd.name = name
+    objd_res.data = s2object.build_objd(objd)
+
+    # --- catalog text ---
+    if name is not None or description is not None:
+        report.warnings.extend(
+            _retitle_ctss(resources, target.ctss_id, name, description))
+
+    # --- NREF: the object's name token, keyed to the object instance ---
+    if name is not None:
+        for r in resources:
+            if r.type_id == s2object.TYPE_NREF and r.instance_id == target.instance:
+                r.data = name.encode('latin-1', 'replace')
+
+    # --- GUID literals inside behaviour trees ---
+    report.patches = patch_guid_references(resources, target.guid, guid,
+                                           aggressive=aggressive)
+    for p in report.patches:
+        if not p.applied:
+            report.warnings.append(
+                f'BHAV 0x{p.instance:04X} "{p.bhav_name}" instr[{p.instr_index}] '
+                f'holds the old GUID at an unconfirmed operand offset '
+                f'(+{p.operand_offset}, opcode 0x{p.opcode:04X}) and was left '
+                f'alone; check it by hand or re-run with --aggressive')
+    return report
+
+
 def _retitle_ctss(resources: list[s2writer.Resource], ctss_id: int,
                   name: str | None, description: str | None) -> list[str]:
-    """Set the catalog title and description. Entry 0 is the title and entry 1
-    the description, per language; only the English (lang 1) pair is touched."""
+    """Set the catalog title and description: entry 0 is the title and entry
+    1 the description, per language. Every language gets the new text — a
+    custom object has one name, and a player whose game runs in another
+    language would otherwise still see the donor's."""
     warnings: list[str] = []
     for r in resources:
         if r.type_id != s2object.TYPE_CTSS or r.instance_id != ctss_id:
             continue
         table = s2object.parse_str(r.data)
-        english = [i for i, e in enumerate(table.entries) if e.lang == 1]
-        if name is not None and len(english) > 0:
-            table.entries[english[0]].value = name
-        if description is not None and len(english) > 1:
-            table.entries[english[1]].value = description
-        other = {e.lang for e in table.entries if e.lang != 1}
-        if other and name is not None:
-            warnings.append(
-                f'CTSS {ctss_id} also carries language(s) '
-                + ', '.join(str(l) for l in sorted(other))
-                + ' still showing the donor\'s name')
+        seen: dict[int, int] = {}
+        for e in table.entries:
+            n = seen.get(e.lang, 0)
+            if n == 0 and name is not None:
+                e.value = name
+            elif n == 1 and description is not None:
+                e.value = description
+            seen[e.lang] = n + 1
         r.data = s2object.build_str(table)
         return warnings
     warnings.append(f'no CTSS with instance {ctss_id} — catalog text unchanged')

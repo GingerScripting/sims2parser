@@ -76,6 +76,35 @@ class LazyResource(Resource):
                 f"i={self.instance_id:08x}, {state}, {self.size} bytes)")
 
 
+def read_lazy(path) -> "tuple":
+    """(header, resources, compressed TGIs) for a package, inflating nothing:
+    a compressed resource becomes a LazyResource. The DIR is not kept — the
+    caller tracks compression in the returned set, and write_package
+    rebuilds a DIR from that. This is how the daemon opens objects.package
+    in a quarter second and how a project build reads its base."""
+    import s2parser
+    from pathlib import Path as _P
+    resources: "list[Resource]" = []
+    compressed: "set[tuple[int, int, int, int]]" = set()
+    with open(_P(path), "rb") as f:
+        header = s2parser.parse_header(f)
+        entries = s2parser.parse_index(f, header)
+        version = (header.index_major_version, header.index_minor_version)
+        directory = s2parser.read_dir(f, entries, version) or {}
+        for e in entries:
+            if e.type_id == s2parser.TYPE_DIR:
+                continue
+            key = (e.type_id, e.group_id, e.instance, e.resource_id)
+            f.seek(e.offset)
+            raw = f.read(e.size)
+            if key in directory:
+                resources.append(LazyResource(e.type_id, e.group_id, e.instance, raw, e.resource_id))
+                compressed.add(key)
+            else:
+                resources.append(Resource(e.type_id, e.group_id, e.instance, raw, e.resource_id))
+    return header, resources, compressed
+
+
 def size(res: Resource) -> int:
     """Uncompressed length of a resource, inflating nothing."""
     return res.size if isinstance(res, LazyResource) else len(res.data)

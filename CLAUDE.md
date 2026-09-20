@@ -30,6 +30,17 @@ editable resource type means a parse/build pair in `s2object.py` registered
 in `PARSERS`, and the daemon serves it with no Swift change beyond a form.
 Never parse game bytes in Swift.
 
+Sim Studio's front door is **New Object**: pick a base from the catalog
+(`s2catalog.py` — the game's objects.package plus Downloads, with texture
+swatches), name and categorise it, and the daemon writes a **project bundle**
+`Name.simobject/` (`project.json` + `overrides/`, see `s2project.py`). A
+project window shows Name & Catalog and, behind the Advanced door, the raw
+resources; **Export Package…** writes the `.package` the game loads and
+**Install** copies it into the game's Downloads. Building a project is
+deterministic (`s2workshop.extract_object` → `reidentify` → overrides →
+identity), so the same project always exports the same package. Opening a
+`.package` directly still gives the raw resource window.
+
 Sim Studio edits neighborhoods the same way: a `*_Neighborhood.package`
 opens read-only, its Sims mode edits SDSC/SREL/NGBH through the ordinary
 undo stack, and **Copy Hood** (`hood_save_as`) copies the whole hood folder
@@ -56,8 +67,21 @@ cd SimBrowser && swift run SimStudioDrive   # drives PackageSession through the 
 ```
 
 Sim Studio can be driven headless when its window can't be seen:
-`SIMSTUDIO_TRACE=1` logs every RPC and detail load to stderr and
-`SIMSTUDIO_OPEN=<file>` opens that package at launch. The editing flow
+`SIMSTUDIO_TRACE=1` logs every RPC and detail load to stderr,
+`SIMSTUDIO_OPEN=<file or .simobject>` opens it at launch, `SIMSTUDIO_SIM=<nid>`
+opens a hood straight into Sims mode on that sim, `SIMSTUDIO_TAB=<tab>` picks
+its page, `SIMSTUDIO_PROFILE=1` opens the Profile sheet, `SIMSTUDIO_PICK=<guid>`
+selects a catalog object on the New Object screen, `SIMSTUDIO_PAGE=resources`
+opens a project on its Advanced page, `SIMSTUDIO_ROOT=<folder>` stands in for
+the game's user folder (catalog Downloads and Install go there — use a scratch
+root with a `Downloads/` of sample packages), and `SIMSTUDIO_SNAPSHOT=<out.png>`
+renders the window to a file a few seconds after it opens — the way to see the
+app from a shell without screen-recording permission. Launch with `open -a "Sim Studio.app" --env …`; the process is
+named `SimStudio`, so quit it with `pkill -x SimStudio` (killing it orphans
+its `s2studio.py --serve` child — kill those too). Point `SIMSTUDIO_OPEN` at
+a copy under `/private/tmp`, not `~/Documents`: an ad-hoc-signed build gets
+a new identity every rebuild, so a file under Documents triggers the privacy
+prompt again and the daemon blocks inside `open()` until someone clicks it. The editing flow
 itself is covered by `cd SimBrowser && swift run SimStudioDrive`, a separate
 executable that drives `PackageSession` — the layer every editor button
 calls — against a scratch copy of a donor through the real daemon (select a
@@ -80,6 +104,9 @@ There is no test framework. Verification is two things:
 
 ```sh
 python3 s2object.py                       # round-trips every parser against donors, byte-for-byte
+python3 s2clone.py sample-packages --selftest      # re-identification: OBJD/CTSS/NREF/BHAV literals
+python3 s2workshop.py --selftest sample-packages   # copies 37 objects out of the game and the donors and proves them
+python3 s2catalog.py --search chair       # the catalog (cached under ~/Library/Application Support/SimStudio)
 python3 s2writer.py <donor.package>       # read → write → re-read → compare
 python3 s2parser.py --qfs-selftest sample-packages/   # recompress every QFS payload and verify
 python3 tests/rpc_smoke.py                # drives the Sim Studio daemon end to end + the read-only policy
@@ -168,13 +195,18 @@ guides. Don't commit them.
 ## Sim Studio layout
 
 `SimBrowser/Package.swift` builds five targets: `SimKit` (shared:
-`IsolatedPane`, `FlowLayout`, `SectionCard`, `Banner`, `PythonLocator`),
-`SimBrowser`, `SimStudioCore` (the RPC client, `JSONValue`, the Codable
-mirrors of the daemon's replies, and `PackageSession` — one open package,
-`@MainActor` — all `public`), `SimStudio` (the views only: three-pane window,
-type tree, resource `Table`, detail pane with Decoded/Tree/Preview/Hex tabs,
-one editor per decodable type under `Views/Editors/`), and `SimStudioDrive`
-(the headless editing-flow check). It is
+`IsolatedPane`, `FlowLayout`, `SectionCard`, `SegmentBar`, `Banner`,
+`PythonLocator`), `SimBrowser`, `SimStudioCore` (the RPC client, `JSONValue`,
+the Codable mirrors of the daemon's replies, `PackageSession` — one open
+package or project, `@MainActor` — and `CatalogService`, the New Object
+screen's own daemon, all `public`), `SimStudio` (the views only: the New
+Object wizard under `Views/NewObject/`, the project window under
+`Views/Project/`, the raw three-pane `ResourceBrowser`, the sim editor, one
+editor per decodable type under `Views/Editors/`), and `SimStudioDrive` (the
+headless editing- and project-flow check). The app icon is drawn by
+`make_icon.swift` into `Resources/SimStudio.icns` once. A sidebar-styled
+`List` under a toolbar, or a row of scrollable panes beside one, slides
+off-window on macOS 26 unless wrapped in `IsolatedPane` — see `ProjectWindow`. It is
 deliberately **not** a document-based app: `FileDocument` would hand Swift
 the bytes. Each package is a `WindowGroup(for: URL.self)` window owning one
 daemon process. Calling `openWindow` inside the first `onAppear` or the
@@ -190,6 +222,11 @@ for one URL, so every open is deferred by a beat.
 | `s2ngbh.py` | NGBH token store — business rank/loyalty, talent badges, `sim_memories()`. `parse_ngbh_rt`/`build_ngbh_rt` are the byte-exact pair the editor uses (both token lists per group, the unread header bytes, the rare trailing word); a store the reader has to resync past is refused rather than rebuilt with a hole. |
 | `s2ltw.py` | Lifetime wants + per-want progress. A sim's LTW is the **first** record of their SWAF (`0xCD95548E`, one resource per sim, instance = sim nid). |
 | `s2luastate.py` | Per-sim Lua tables (`0x3053CF74`) — OFB perks, Pets behaviors |
+| `s2object.py` | Object resource parsers **and** builders (STR#, TTAB, OBJf, OBJD, BCON, GLOB, and the byte-exact BHAV pair `parse_bhav_rt`/`build_bhav` plus `bhav_convert`), the from-scratch BHAV assembler, and `BHAV_OPERAND_LAYOUTS` for the editor |
+| `s2clone.py` | Re-identify an object: OBJD GUIDs, catalog text (every language), NREF, and the GUID literals in its trees at confirmed operand slots (`GUID_OPERANDS`), walking every BHAV format via `BHAV_LAYOUTS`. `reidentify_object` is the piece `s2workshop` and `clone` share. |
+| `s2catalog.py` | Every buyable object in objects.package and Downloads with name, price, Buy Mode categories (`FUNCTION_SORT`/`ROOM_SORT`), tile count and a texture swatch. Game models are found by hash: `0xFF000000 \| crc24(name)` in group `0x1C0532FA` of `Sims3D/Objects*.package` (`s2parser.crc24`). Cache keyed by file size+mtime; callers merge, never evict. |
+| `s2workshop.py` | The Object Workshop: copy one object out (its whole group, or a custom package whole) as inflated resources, renumber the group to `0xFFFFFFFF`, fresh GUID per OBJD (tiles included), identity read back from the resources. `--selftest` proves it against the game's own objects. |
+| `s2project.py` | The `.simobject` bundle and its deterministic build; overrides are diffed against a clean build at save time. GUIDs derive from the project's uuid, never its name. |
 | `s2object.py` | Object resource parsers **and** builders (STR#, TTAB, OBJf, OBJD, BCON, GLOB, TPRP, and the byte-exact BHAV pair `parse_bhav_rt`/`build_bhav` plus `bhav_convert`), the from-scratch BHAV assembler, and `BHAV_OPERAND_LAYOUTS` for the editor |
 | `s2clone.py` | The SimPE "Object Workshop" step — clone an object to a new identity, rewriting every reference so it coexists with its donor. Sim Studio's Tools ▸ Clone Object runs it in place as one undo step. |
 | `s2texture.py` | TXTR/LIFO → PNG. Owns the **generic RCOL reader**, which `s2mesh.py` reuses. |

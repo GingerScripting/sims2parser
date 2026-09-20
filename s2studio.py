@@ -56,8 +56,12 @@ import s2clone
 import s2doctor
 import s2mesh
 import s2object
+import s2catalog
 import s2package
 import s2parser
+import s2profile
+import s2project
+import s2workshop
 import s2texture
 import s2tools
 import s2writer
@@ -269,6 +273,9 @@ class Session:
     bhav_names: "dict[int, str] | None" = None
     # Per-session lookups that are expensive to build (a hood's characters).
     cache: dict = field(default_factory=dict)
+    # Set when the session is an object project: `resources` is then the
+    # built package, `path` the project folder, and Save writes the bundle.
+    project: "s2project.Project | None" = None
 
     # -- history ----------------------------------------------------------
 
@@ -339,26 +346,8 @@ def load(path: Path) -> Session:
     # LazyResource that decompresses when first looked at. The DIR itself is
     # not kept as a resource — the session tracks compression in
     # `compressed`, and write_package rebuilds the DIR from that.
-    resources: "list[Resource]" = []
-    compressed: "set[tuple[int, int, int, int]]" = set()
     try:
-        with open(path, "rb") as f:
-            header = s2parser.parse_header(f)
-            entries = s2parser.parse_index(f, header)
-            version = (header.index_major_version, header.index_minor_version)
-            directory = s2parser.read_dir(f, entries, version) or {}
-            for e in entries:
-                if e.type_id == s2parser.TYPE_DIR:
-                    continue
-                key = (e.type_id, e.group_id, e.instance, e.resource_id)
-                f.seek(e.offset)
-                raw = f.read(e.size)
-                if key in directory:
-                    resources.append(s2package.LazyResource(
-                        e.type_id, e.group_id, e.instance, raw, e.resource_id))
-                    compressed.add(key)
-                else:
-                    resources.append(Resource(e.type_id, e.group_id, e.instance, raw, e.resource_id))
+        header, resources, compressed = s2package.read_lazy(path)
     except (OSError, ValueError, struct.error) as exc:
         raise RpcError("bad_package", f"cannot read {path.name}: {exc}") from None
 
@@ -403,7 +392,7 @@ def _index_row(session: Session, r: Resource) -> dict:
 
 def _summary(session: Session) -> dict:
     h = session.header
-    return {
+    out = {
         "path": str(session.path),
         "readonly": session.readonly,
         "readonly_reason": session.readonly_reason,
@@ -416,6 +405,17 @@ def _summary(session: Session) -> dict:
         "undo_label": session.undo[-1].label if session.undo else None,
         "redo_label": session.redo[-1].label if session.redo else None,
     }
+    if session.project is not None:
+        # The identity is a view over the resources, so undo and raw edits
+        # show through without any bookkeeping of their own.
+        try:
+            current = s2workshop.read_identity(session.resources)
+            current.guids = session.project.identity.guids or current.guids
+            session.project.identity = current
+        except (ValueError, struct.error):
+            pass
+        out["project"] = session.project.summary()
+    return out
 
 
 def _bhav_names(session: Session) -> dict:
@@ -456,7 +456,10 @@ def _write(session: Session, dest: Path) -> None:
 
 
 def m_open(session: Session, params: dict) -> dict:
-    new = load(Path(_need(params, "path")).expanduser())
+    path = Path(_need(params, "path")).expanduser()
+    if path.is_dir() and path.suffix == s2project.EXTENSION:
+        return m_project_open(session, params)
+    new = load(path)
     session.__dict__.update(new.__dict__)
     return _summary(session)
 
@@ -540,6 +543,9 @@ def m_meta(session: Session, params: dict) -> dict:
                         "no_desc": s2object.STR_FMT_NO_DESC},
         "ttab_layouts": {str(k): {"entry_size": v[0], "ttas_offset": v[1]}
                          for k, v in s2object.TTAB_LAYOUTS.items()},
+        # Buy Mode categories (OBJD words 40 and 39), for the project window.
+        "function_sort": [{"bit": b, "name": n} for b, n in s2catalog.FUNCTION_SORT],
+        "room_sort": [{"bit": b, "name": n} for b, n in s2catalog.ROOM_SORT],
     }
 
 
@@ -701,6 +707,8 @@ def m_redo(session: Session, params: dict) -> dict:
 
 def m_save(session: Session, params: dict) -> dict:
     session.require_open()
+    if session.project is not None:
+        return m_project_save(session, params)
     if session.readonly:
         raise RpcError("readonly", f"{session.path.name} is read-only: {session.readonly_reason}. "
                        "Use Save As to write a copy elsewhere.",
@@ -712,6 +720,8 @@ def m_save(session: Session, params: dict) -> dict:
 
 def m_save_as(session: Session, params: dict) -> dict:
     session.require_open()
+    if session.project is not None:
+        raise RpcError("bad_params", "a project is not saved as a package; use project_export")
     dest = Path(_need(params, "path")).expanduser()
     reason = protection_reason(dest)
     if reason is not None:
@@ -1226,6 +1236,7 @@ import shutil
 
 import hoodcheck
 import s2neighborhood
+import s2ltw
 import s2ngbh
 
 _MEMORY_NAMES: "dict[int, str] | None" = None
@@ -1246,6 +1257,33 @@ def _characters(session: Session) -> dict:
         session.cache["characters"] = (
             s2neighborhood.load_characters(d / "Characters") if d else {})
     return session.cache["characters"]
+
+
+def _household_names(session: Session) -> "dict[int, str]":
+    """family id -> household name, from the hood's private STR# resources.
+    A hood has a few hundred of them and they are tiny, so this is rebuilt
+    per call rather than cached and possibly stale after a STR# edit."""
+    names = {}
+    for r in session.resources:
+        if r.type_id == s2neighborhood.TID_STR and r.group_id == 0xFFFFFFFF:
+            try:
+                name = s2neighborhood.household_name(r.data)
+            except Exception:
+                continue
+            if name:
+                names[r.instance_id] = name
+    return names
+
+
+def _sim_ltw(session: Session, nid: int) -> "dict | None":
+    """The sim's lifetime want out of their SWAF, if the package holds one."""
+    for r in session.resources:
+        if r.type_id == s2ltw.TID_SWAF and r.instance_id == nid:
+            try:
+                return s2ltw.parse_ltw(r.data)
+            except (ValueError, struct.error):
+                return None
+    return None
 
 
 def _memory_names() -> "dict[int, str]":
@@ -1352,6 +1390,9 @@ def m_hood_meta(session: Session, params: dict) -> dict:
                         for k, v in s2neighborhood.SREL_TABLES.items()},
         "memory_owner_slot": s2ngbh.MEMORY_OWNER,
         "memory_subject_slot": s2ngbh.MEMORY_SUBJECT,
+        # Rank titles per career track, so a level shows as "Science Teacher".
+        "career_titles": {str(guid): list(c.get("titles") or [])
+                          for guid, c in s2neighborhood.CAREERS.items()},
     }
 
 
@@ -1412,10 +1453,58 @@ def m_hood_sim(session: Session, params: dict) -> dict:
                 tokens["second"] = _tokens_json(g.second)
         except ValueError as exc:
             tokens["error"] = str(exc)
+    # The sim's own memories and badges, for the prose profile. A token is
+    # this sim's memory when its owner slot holds the nid (gossip about other
+    # sims sits in the same group).
+    own_memories = set()
+    badges = {}
+    for t in tokens["first"] + tokens["second"]:
+        vals = t["values"]
+        if len(vals) > s2ngbh.MEMORY_OWNER and vals[s2ngbh.MEMORY_OWNER] == nid:
+            own_memories.add(t["guid"])
+        badge = s2ngbh.BADGE_TOKENS.get(t["guid"])
+        if badge and vals and vals[0]:
+            badges[badge] = {"points": vals[0], "level": s2ngbh.badge_level(vals[0])}
+    household = _household_names(session).get(resolved["family_id"], "")
+    profile = s2profile.describe(resolved, first=ch.get("first", ""), household=household,
+                                 memory_guids=own_memories if tokens["editable"] else frozenset(),
+                                 badges=badges, ltw=_sim_ltw(session, nid))
     return {"nid": nid, "tgi": s2package.tgi_json(r.tgi()), "fields": fields,
             "resolved": resolved, "first": ch.get("first", ""), "last": ch.get("last", ""),
             "bio": ch.get("bio", ""), "char_file": ch.get("file", ""),
+            "household": household, "profile": profile,
             "relationships": rels, "tokens": tokens}
+
+
+def m_hood_sim_portrait(session: Session, params: dict) -> dict:
+    """The sim's face from their character package: a 256x256 JPEG, the one
+    for their current life stage when the game has rendered it, else the
+    latest stage it has. Read-only — the character file is opened, never
+    written. `not_found` when there is no image."""
+    session.require_open()
+    nid = int(_need(params, "nid"))
+    d = _hood_dir(session)
+    resolved = s2neighborhood.parse_sdsc(_sdsc_resource(session, nid).data)
+    ch = _characters(session).get(resolved["guid"], {})
+    if d is None or not ch.get("file"):
+        raise RpcError("not_found", f"sim {nid} has no character file")
+    path = d / "Characters" / ch["file"]
+    try:
+        _, entries = s2parser.open_package(path)
+    except (OSError, ValueError) as exc:
+        raise RpcError("not_found", f"cannot read {path.name}: {exc}") from None
+    bits = {v: k for k, v in s2neighborhood.LIFESTAGE_BITS.items()}
+    faces = {e.instance: e for e in entries
+             if e.type_id == s2neighborhood.TID_IMAGE and e.instance in bits}
+    if not faces:
+        raise RpcError("not_found", f"{path.name} holds no portrait")
+    want = s2neighborhood.LIFESTAGE_BITS.get(resolved["age"])
+    inst = want if want in faces else max(faces)
+    with open(path, "rb") as f:
+        data = s2parser.read_resource(f, faces[inst])
+    mime = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg"
+    return {"nid": nid, "stage": bits[inst], "mime": mime, "width": 256, "height": 256,
+            "image_b64": base64.b64encode(data).decode("ascii")}
 
 
 def m_hood_put_sim(session: Session, params: dict) -> dict:
@@ -1554,6 +1643,195 @@ def m_bhav_transform(session: Session, params: dict) -> dict:
     return {"decoded": to_json(b), "warnings": warnings}
 
 
+# ---------------------------------------------------------------------------
+# Object projects and the catalog
+# ---------------------------------------------------------------------------
+
+def _catalog_root(params: dict) -> "Path | None":
+    if params.get("root"):
+        return Path(params["root"]).expanduser()
+    return next((c for c in s2doctor.ROOT_CANDIDATES if (c / "Neighborhoods").is_dir()), None)
+
+
+def m_catalog(session: Session, params: dict) -> dict:
+    """Every buyable object in the game and in Downloads (or in the folders
+    given), with names, prices, categories and swatch hints. Cached per file,
+    so only a changed package is rescanned; progress events while scanning."""
+    kwargs = {}
+    if params.get("objects"):
+        kwargs["objects_package"] = Path(params["objects"]).expanduser()
+    if params.get("downloads"):
+        kwargs["downloads"] = Path(params["downloads"]).expanduser()
+    try:
+        cat = s2catalog.catalog(_catalog_root(params), refresh=bool(params.get("refresh")),
+                                progress=lambda d, t, n: _progress("catalog", d, t, n), **kwargs)
+    except (OSError, ValueError, struct.error) as exc:
+        raise RpcError("catalog_failed", str(exc)) from None
+    return {
+        "entries": [c.to_json() for c in cat["entries"]],
+        "sources": cat["sources"], "scanned": cat["scanned"], "cached": cat["cached"],
+        "function_sort": [{"bit": b, "name": n} for b, n in s2catalog.FUNCTION_SORT],
+        "room_sort": [{"bit": b, "name": n} for b, n in s2catalog.ROOM_SORT],
+    }
+
+
+def m_catalog_swatch(session: Session, params: dict) -> dict:
+    """One object's swatch as PNG, from the catalog cache or freshly resolved."""
+    fields = {k: params[k] for k in ("guid", "group", "source", "name", "description", "price",
+                                      "room_flags", "function_flags", "tiles", "model", "swatch",
+                                      "filename") if k in params}
+    for k, v in (("name", ""), ("description", ""), ("price", 0), ("room_flags", 0), ("function_flags", 0)):
+        fields.setdefault(k, v)
+    entry = s2catalog.CatalogEntry(**fields)
+    objects = Path(params["objects"]).expanduser() if params.get("objects") else None
+    try:
+        png = s2catalog.swatch(entry, objects_package=objects)
+    except (OSError, ValueError, struct.error, IndexError) as exc:
+        raise RpcError("swatch_failed", str(exc)) from None
+    if png is None:
+        raise RpcError("not_found", f"no picture for {entry.name}")
+    return {"guid": entry.guid, "png_b64": base64.b64encode(png).decode("ascii")}
+
+
+def _open_project(session: Session, project: "s2project.Project") -> dict:
+    try:
+        resources = s2project.build(project)
+    except (OSError, ValueError, struct.error) as exc:
+        raise RpcError("build_failed", str(exc)) from None
+    new = Session(path=project.dir, readonly=False, readonly_reason="", header=None,
+                  resources=resources, compressed=set())
+    new.project = project
+    session.__dict__.update(new.__dict__)
+    return _summary(session)
+
+
+def m_project_new(session: Session, params: dict) -> dict:
+    """Start a project from a catalog entry: build it and open it. `path` is
+    the .simobject folder to create; it is written at once so the window
+    has a document from the first moment."""
+    path = Path(_need(params, "path")).expanduser()
+    if path.suffix != s2project.EXTENSION:
+        path = path.with_name(path.name + s2project.EXTENSION)
+    reason = protection_reason(path)
+    if reason is not None:
+        raise RpcError("destination_protected", f"refusing to create {path.name}: {reason}")
+    if path.exists():
+        raise RpcError("exists", f"{path.name} already exists")
+    if not path.parent.is_dir():
+        raise RpcError("not_found", f"no such folder: {path.parent}")
+    base = s2project.Base.from_json(_need(params, "base"))
+    identity = s2workshop.Identity.from_json(params.get("identity") or {})
+    if not identity.name:
+        identity.name = base.name or path.stem
+    project = s2project.new(path, base, identity)
+    result = _open_project(session, project)
+    try:
+        s2project.save(project, session.resources)
+    except (OSError, ValueError, struct.error) as exc:
+        raise RpcError("write_failed", str(exc)) from None
+    session.dirty = False
+    return _summary(session)
+
+
+def m_project_open(session: Session, params: dict) -> dict:
+    path = Path(_need(params, "path")).expanduser()
+    if not (path / s2project.PROJECT_FILE).is_file():
+        raise RpcError("not_found", f"{path.name} is not a Sim Studio object project")
+    try:
+        project = s2project.load(path)
+    except (OSError, ValueError) as exc:
+        raise RpcError("bad_project", str(exc)) from None
+    return _open_project(session, project)
+
+
+def _require_project(session: Session) -> "s2project.Project":
+    session.require_open()
+    if session.project is None:
+        raise RpcError("bad_params", "this window is not an object project")
+    return session.project
+
+
+def m_project_set(session: Session, params: dict) -> dict:
+    """Change the name, description, price or categories, as one undo step."""
+    project = _require_project(session)
+    current = s2workshop.read_identity(session.resources)
+    wanted = params.get("identity") or {}
+    ident = s2workshop.Identity(
+        name=str(wanted.get("name", current.name)),
+        description=str(wanted.get("description", current.description)),
+        price=int(wanted.get("price", current.price)),
+        room_flags=int(wanted.get("room_flags", current.room_flags)),
+        function_flags=int(wanted.get("function_flags", current.function_flags)),
+        guid=current.guid, guids=current.guids)
+    before = [(r.tgi(), s2package.copy(r)) for r in session.resources]
+    try:
+        s2workshop.apply_identity(session.resources, ident)
+    except (ValueError, struct.error) as exc:
+        session.resources[:] = [old for _, old in before]
+        raise RpcError("build_failed", str(exc)) from None
+    changes = []
+    for n, r in enumerate(session.resources):
+        old_tgi, old = before[n]
+        if s2package.same_bytes(old, r):
+            continue
+        changes.append(Change(old_tgi, old, s2package.copy(r), n, False, False))
+    if changes:
+        what = ("Rename" if ident.name != current.name else
+                "Reprice" if ident.price != current.price else
+                "Describe" if ident.description != current.description else "Recategorise")
+        session.push(Step(what, changes))
+    project.identity = ident
+    return {"changed": len(changes), **_summary(session)}
+
+
+def m_project_save(session: Session, params: dict) -> dict:
+    project = _require_project(session)
+    try:
+        s2project.save(project, session.resources)
+    except (OSError, ValueError, struct.error) as exc:
+        raise RpcError("write_failed", str(exc)) from None
+    session.dirty = False
+    return _summary(session)
+
+
+def m_project_export(session: Session, params: dict) -> dict:
+    """Write the package the game will load, wherever the user chose."""
+    project = _require_project(session)
+    dest = Path(_need(params, "path")).expanduser()
+    reason = protection_reason(dest)
+    if reason is not None:
+        raise RpcError("destination_protected", f"refusing to write {dest.name}: {reason}")
+    if not dest.parent.is_dir():
+        raise RpcError("not_found", f"no such folder: {dest.parent}")
+    try:
+        s2project.export(project, session.resources, dest)
+    except (OSError, ValueError) as exc:
+        raise RpcError("write_failed", str(exc)) from None
+    return {**_summary(session), "file": str(dest), "size": dest.stat().st_size}
+
+
+def m_project_install(session: Session, params: dict) -> dict:
+    """Copy the last export (or a fresh one) into the game's Downloads."""
+    project = _require_project(session)
+    root = _game_root(params)
+    exported = Path(project.exported) if project.exported else None
+    if exported is None or not exported.is_file():
+        exported = project.dir / (project.name + ".package")
+        try:
+            s2project.export(project, session.resources, exported)
+        except (OSError, ValueError) as exc:
+            raise RpcError("write_failed", str(exc)) from None
+    try:
+        dest = s2project.install(project, exported, root, replace=bool(params.get("replace")))
+    except FileExistsError as exc:
+        raise RpcError("exists", str(exc)) from None
+    except PermissionError as exc:
+        raise RpcError("write_failed", f"macOS refused access to the game folder: {exc}") from None
+    except (OSError, ValueError) as exc:
+        raise RpcError("write_failed", str(exc)) from None
+    return {**_summary(session), "file": str(dest)}
+
+
 def m_shutdown(session: Session, params: dict) -> dict:
     return {"bye": True}
 
@@ -1596,6 +1874,15 @@ METHODS = {
     "hood_put_sim": m_hood_put_sim,
     "hood_put_srel": m_hood_put_srel,
     "hood_put_tokens": m_hood_put_tokens,
+    "hood_sim_portrait": m_hood_sim_portrait,
+    "catalog": m_catalog,
+    "catalog_swatch": m_catalog_swatch,
+    "project_new": m_project_new,
+    "project_open": m_project_open,
+    "project_set": m_project_set,
+    "project_save": m_project_save,
+    "project_export": m_project_export,
+    "project_install": m_project_install,
     "hood_save_as": m_hood_save_as,
     "shutdown": m_shutdown,
 }

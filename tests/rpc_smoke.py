@@ -313,6 +313,7 @@ def main() -> int:
             c.close()
 
     hood_smoke()
+    project_smoke()
     print("rpc smoke: OK")
     return 0
 
@@ -348,6 +349,7 @@ def hood_smoke() -> None:
             info = c.call("open", path=str(hood))
             meta = c.call("hood_meta")
             assert meta["is_hood"] and meta["sdsc_fields"] and meta["sdsc_tables"]["career"]
+            assert any(len(t) == 10 for t in meta["career_titles"].values()), "career titles"
             check = meta["check"]
             assert check is not None and "healthy" in check and check["sdsc_count"] > 0, check
             assert check["summary"].startswith("Token store"), check["summary"]
@@ -358,7 +360,26 @@ def hood_smoke() -> None:
             sim = (named or sims)[0]
             d = c.call("hood_sim", nid=sim["nid"])
             assert d["fields"]["nid"] == sim["nid"] and "skills.Logic" in d["fields"]
+            assert "genetic.Neat" in d["fields"], "genetic personality"
+            assert isinstance(d["profile"], list) and d["profile"], "prose profile"
+            assert isinstance(d["household"], str)
             before = d["fields"]["skills.Logic"]
+            # The portrait lives in the character file; the snapshot may lack one.
+            if (hood.parent / "Characters" / sim["char_file"]).is_file():
+                pic = c.call("hood_sim_portrait", nid=sim["nid"])
+                assert pic["mime"].startswith("image/") and len(pic["image_b64"]) > 100, pic.keys()
+                print(f"portrait: {pic['stage']} face, {len(pic['image_b64']) * 3 // 4} bytes")
+            else:
+                expect_error("not_found", c.call, "hood_sim_portrait", nid=sim["nid"])
+            # A new meter value past the ten-point range is refused, but a
+            # genetic edit inside it goes through and undoes like any other.
+            expect_error("build_failed", c.call, "hood_put_sim", nid=sim["nid"], fields={"skills.Logic": 1001})
+            gen = d["fields"]["genetic.Neat"]
+            r = c.call("hood_put_sim", nid=sim["nid"], fields={"genetic.Neat": 1000 if gen != 1000 else 999})
+            assert r["changed"]
+            assert c.call("hood_sim", nid=sim["nid"])["fields"]["genetic.Neat"] != gen
+            c.call("undo")
+            assert c.call("hood_sim", nid=sim["nid"])["fields"]["genetic.Neat"] == gen
             if d["relationships"]:
                 rel = d["relationships"][0]
                 r = c.call("hood_put_srel", owner=sim["nid"], target=rel["target"],
@@ -399,6 +420,90 @@ def hood_smoke() -> None:
 def _roundtrip(decoded: dict):
     import s2studio
     return s2studio.from_json(decoded)
+
+
+
+def project_smoke() -> None:
+    """The object maker: catalog, a project from a sample donor, identity
+    edits through undo, a raw edit that survives save and reopen, export,
+    install into a fake game root, and the policy refusals."""
+    sample = Path(__file__).resolve().parent.parent / "sample-packages"
+    if not sample.is_dir():
+        print("skip: no sample-packages for the project checks")
+        return
+    with tempfile.TemporaryDirectory(prefix="s2studio-project-") as tmp:
+        tmp = Path(tmp)
+        c = Client()
+        try:
+            c.call("meta")
+            cat = c.call("catalog", downloads=str(sample), objects=str(tmp / "no-objects.package"))
+            names = [e["name"] for e in cat["entries"]]
+            assert any("Diploma" in n for n in names) and any("Blender" in n for n in names), names
+            assert cat["function_sort"] and cat["room_sort"]
+            dip = next(e for e in cat["entries"] if "Diploma" in e["name"])
+            sw = c.call("catalog_swatch", **dip)
+            assert sw["png_b64"].startswith("iVBOR"), "swatch is not a PNG"
+            proj_dir = tmp / "Smoke Object.simobject"
+            r = c.call("project_new", path=str(proj_dir),
+                       base={"source": dip["source"], "guid": dip["guid"], "group": dip["group"], "name": dip["name"]},
+                       identity={"name": "Smoke Object", "description": "made by the smoke test",
+                                 "price": 42, "room_flags": 0x2, "function_flags": 0x20})
+            assert r["project"]["identity"]["guid"] != dip["guid"] and not r["readonly"] and not r["dirty"]
+            new_guid = r["project"]["identity"]["guid"]
+            objs = c.call("objects")["objects"]
+            assert len(objs) == 1 and objs[0]["guid"] == new_guid and objs[0]["price"] == 42, objs
+            assert objs[0]["group"] == 0xFFFFFFFF
+            r = c.call("project_set", identity={"price": 77})
+            assert r["changed"] and r["undo_label"] == "Reprice", r["undo_label"]
+            c.call("undo")
+            assert c.call("objects")["objects"][0]["price"] == 42
+            c.call("redo")
+            assert c.call("status")["project"]["identity"]["price"] == 77
+            # A raw edit in the Advanced view becomes an override on save.
+            rows = c.call("index")["rows"]
+            strrow = next(row for row in rows if row[0] == 0x53545223)
+            tgi = {"type": strrow[0], "group": strrow[1], "instance": strrow[2], "instance_hi": strrow[3]}
+            d = c.call("get_resource", tgi=tgi)
+            dec = d["decoded"]
+            dec["entries"][0]["value"] = "smoke edited"
+            r = c.call("put_resource", tgi=tgi, decoded=dec)
+            assert r["changed"]
+            c.call("project_save")
+            assert (proj_dir / "overrides").is_dir() and any((proj_dir / "overrides").iterdir())
+            r = c.call("project_export", path=str(tmp / "Smoke Object.package"))
+            assert Path(r["file"]).is_file() and r["size"] > 1000
+            fake = tmp / "root"
+            (fake / "Downloads").mkdir(parents=True)
+            (fake / "Neighborhoods").mkdir()
+            r = c.call("project_install", root=str(fake))
+            assert (fake / "Downloads" / "Smoke Object.package").is_file(), r
+            expect_error("exists", c.call, "project_install", root=str(fake))
+            c.call("project_install", root=str(fake), replace=True)
+            expect_error("bad_params", c.call, "save_as", path=str(tmp / "x.package"))
+            hood = tmp / "Neighborhoods" / "N001"
+            hood.mkdir(parents=True)
+            shutil.copy(tmp / "Smoke Object.package", hood / "N001_Neighborhood.package")
+            expect_error("destination_protected", c.call, "project_export", path=str(hood / "x.package"))
+        finally:
+            c.close()
+        # The saved project reopens with the edit, and the export is a clean package.
+        c2 = Client()
+        try:
+            c2.call("meta")
+            r = c2.call("open", path=str(proj_dir))
+            assert r["project"]["identity"]["price"] == 77, r["project"]["identity"]
+            d = c2.call("get_resource", tgi=tgi)
+            assert d["decoded"]["entries"][0]["value"] == "smoke edited", "override lost on reopen"
+            r = c2.call("open", path=str(tmp / "Smoke Object.package"))
+            rows = c2.call("index")["rows"]
+            groups = {row[1] for row in rows if row[0] != 0xE86B1EEF}
+            assert groups == {0xFFFFFFFF}, {hex(g) for g in groups}
+            assert c2.call("objects")["objects"][0]["guid"] == new_guid
+            assert c2.call("overview")["headline"].startswith("An object: Smoke Object")
+        finally:
+            c2.close()
+        print("project: catalog, new from the diploma, reprice/undo/redo, raw edit kept as an "
+              "override, exported and installed into a scratch root, refusals OK")
 
 
 if __name__ == "__main__":

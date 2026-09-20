@@ -72,7 +72,13 @@ public final class PackageSession: ObservableObject, Identifiable {
     public var undoLabel: String { summary?.undoLabel.map { "Undo \($0)" } ?? "Undo" }
     public var redoLabel: String { summary?.redoLabel.map { "Redo \($0)" } ?? "Redo" }
     public var currentURL: URL { summary.map { URL(fileURLWithPath: $0.path) } ?? url }
-    public var title: String { currentURL.lastPathComponent }
+    public var title: String {
+        if let p = project { return p.name }
+        return currentURL.lastPathComponent
+    }
+    /// The object project this window edits, when it is one.
+    public var project: ProjectInfo? { summary?.project }
+    public var isProject: Bool { project != nil }
 
     public func typeName(_ type: UInt32) -> String { meta?.typeName(type) ?? hex8(type) }
     public func typeDescription(_ type: UInt32) -> String? { meta?.typeDescription(type) }
@@ -85,9 +91,23 @@ public final class PackageSession: ObservableObject, Identifiable {
 
     // MARK: Lifecycle
 
-    /// Launch the daemon and open the package. Called once from the window.
+    /// Launch the daemon and open the package. Called from the window's
+    /// `.task`, which the window cancels and re-runs while it is first shown
+    /// (the root view appears, disappears, and reappears — see PackageRoot).
+    /// The work therefore runs in a task the session owns: a cancelled
+    /// caller just stops waiting, and the next caller waits on the same run
+    /// instead of finding a half-opened session.
     public func start() async {
         trace("session \(id.uuidString.prefix(8)) start (client \(client == nil ? "nil" : "set"))")
+        if startTask == nil {
+            startTask = Task { @MainActor [self] in await self.performStart() }
+        }
+        await startTask?.value
+    }
+
+    private var startTask: Task<Void, Never>?
+
+    private func performStart() async {
         guard client == nil else { return }
         let python = PythonLocator.interpreter()
         let script = PythonLocator.script("s2studio.py", defaultsKey: "studioPath")
@@ -105,6 +125,7 @@ public final class PackageSession: ObservableObject, Identifiable {
             await loadHoodMeta()
             await loadNames()
         } catch {
+            trace("session \(id.uuidString.prefix(8)) start failed: \(describe(error))")
             phase = .failed("Could not open \(url.lastPathComponent) with \(python) \(script): "
                             + describe(error))
         }
@@ -319,7 +340,8 @@ public final class PackageSession: ObservableObject, Identifiable {
     // MARK: Files
 
     public func save() async -> Bool {
-        await mutate {
+        if isProject { return await projectSave() }
+        return await mutate {
             self.summary = try await $0.call("save", as: PackageSummary.self)
         }
     }
@@ -341,6 +363,74 @@ public final class PackageSession: ObservableObject, Identifiable {
             let r = try await $0.call("import_resource", ["tgi": tgi.json, "path": .string(src.path)], as: PutResult.self)
             self.summary = r.summary
             self.replaceRow(tgi: tgi, size: r.size, name: r.name)
+        }
+    }
+
+    // MARK: Object projects
+
+    /// The base object's picture, for the project window's header.
+    public func baseSwatch() async -> Data? {
+        guard let c = client, let b = project?.base else {
+            trace("baseSwatch: no client or no project base")
+            return nil
+        }
+        let params: [String: JSONValue] = ["guid": .int(Int(b.guid)), "group": .int(Int(b.group)),
+                                           "source": .string(b.source), "name": .string(b.name)]
+        do {
+            let r = try await c.call("catalog_swatch", params, as: SwatchResult.self)
+            return Data(base64Encoded: r.pngB64)
+        } catch {
+            trace("baseSwatch: \(error)")
+            return nil
+        }
+    }
+
+    /// Change the name, description, price or categories: one undo step.
+    public func projectSet(_ identity: ProjectIdentity) async -> Bool {
+        await mutate {
+            self.summary = try await $0.call("project_set", ["identity": identity.json], as: PackageSummary.self)
+        }
+    }
+
+    /// Write the project bundle (⌘S on a project window).
+    public func projectSave() async -> Bool {
+        await mutate {
+            self.summary = try await $0.call("project_save", as: PackageSummary.self)
+        }
+    }
+
+    /// Write the package the game loads. Returns the file written.
+    public func projectExport(to dest: URL) async -> URL? {
+        guard let c = client else { return nil }
+        busy = true
+        defer { busy = false }
+        do {
+            let r = try await c.call("project_export", ["path": .string(dest.path)], as: ExportResult.self)
+            summary = r.summary
+            return URL(fileURLWithPath: r.file)
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// Copy the export into the game's Downloads. `replace` overwrites an
+    /// earlier install; without it a clash comes back as `exists`.
+    public func projectInstall(replace: Bool = false) async -> Result<URL, RPCFailure>? {
+        guard let c = client else { return nil }
+        busy = true
+        defer { busy = false }
+        do {
+            var params: [String: JSONValue] = ["replace": .bool(replace)]
+            if let root = CatalogService.gameRootOverride { params["root"] = .string(root) }
+            let r = try await c.call("project_install", params, as: ExportResult.self)
+            summary = r.summary
+            return .success(URL(fileURLWithPath: r.file))
+        } catch let f as RPCFailure {
+            return .failure(f)
+        } catch {
+            report(error)
+            return nil
         }
     }
 
@@ -492,6 +582,15 @@ public final class PackageSession: ObservableObject, Identifiable {
         catch { report(error); return nil }
     }
 
+    /// The sim's face for their current life stage, as image bytes for
+    /// `NSImage(data:)`. Nil when the character file holds none — a normal
+    /// state for a sim the game has never rendered, so it is not reported.
+    public func simPortrait(_ nid: Int) async -> Data? {
+        guard let c = client else { return nil }
+        guard let p = try? await c.call("hood_sim_portrait", ["nid": .int(nid)], as: SimPortrait.self) else { return nil }
+        return Data(base64Encoded: p.imageB64)
+    }
+
     public func putSim(_ nid: Int, fields: [String: Int]) async -> Bool {
         await mutate {
             let r = try await $0.call("hood_put_sim", ["nid": .int(nid),
@@ -563,6 +662,9 @@ public final class PackageSession: ObservableObject, Identifiable {
     }
 
     private func report(_ error: Error) {
+        // A cancelled task is a view that moved on (a new selection, a window
+        // root recreated at launch), not something to tell the user about.
+        if error is CancellationError { return }
         errorMessage = describe(error)
     }
 

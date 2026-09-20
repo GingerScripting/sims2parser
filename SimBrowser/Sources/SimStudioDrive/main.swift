@@ -141,8 +141,67 @@ func drive(_ scratch: URL) async {
     guard session.detail == nil, !session.detailLoading else { fail("deselect left the pane populated") }
 
     session.close()
+    await driveProject(scratch.deletingLastPathComponent())
     log("OK")
     exit(0)
+}
+
+/// The object maker: catalog a scratch root, make a project from the
+/// Diploma in its Downloads, edit the identity through undo, export,
+/// install into the scratch root, and re-open both the project and the
+/// export.
+@MainActor
+func driveProject(_ dir: URL) async {
+    let root = dir.appendingPathComponent("root")
+    let downloads = root.appendingPathComponent("Downloads")
+    try! FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+    try! FileManager.default.createDirectory(at: root.appendingPathComponent("Neighborhoods"), withIntermediateDirectories: true)
+    let donor = repoRoot.appendingPathComponent("sample-packages/Christianlov_CounterfeitCollegeDiploma.package")
+    try! FileManager.default.copyItem(at: donor, to: downloads.appendingPathComponent(donor.lastPathComponent))
+    CatalogService.gameRootOverride = root.path
+
+    let catalog = CatalogService()
+    await catalog.load(refresh: true)
+    guard let base = catalog.entries.first(where: { $0.name.contains("Diploma") && !$0.isGame }) else {
+        fail("the catalog did not list the Diploma from the scratch Downloads (\(catalog.entries.count) entries)")
+    }
+    guard let png = await catalog.swatch(for: base), png.count > 100 else { fail("no swatch for the Diploma") }
+    let project = dir.appendingPathComponent("Drive Object.simobject")
+    let identity = ProjectIdentity(name: "Drive Object", description: "made by the drive", price: 42, roomFlags: 2, functionFlags: 0x20)
+    guard await catalog.createProject(at: project, base: base, identity: identity) else {
+        fail("project_new: \(catalog.errorMessage ?? "?")")
+    }
+    catalog.close()
+    log("project created from \(base.name)")
+
+    let s = await open(project)
+    guard s.isProject, let info = s.project, info.identity.price == 42, !s.isReadonly else { fail("project did not open as a project") }
+    guard s.rows.count > 10, s.title == "Drive Object" else { fail("project window state: \(s.rows.count) rows, title \(s.title)") }
+    var want = info.identity
+    want.price = 77
+    guard await s.projectSet(want), s.project?.identity.price == 77, s.undoLabel == "Undo Reprice" else { fail("project_set: \(s.undoLabel)") }
+    await s.undo()
+    guard s.project?.identity.price == 42 else { fail("undo did not restore the price") }
+    await s.redo()
+    guard s.project?.identity.price == 77 else { fail("redo did not reapply the price") }
+    guard await s.projectSave(), !s.isDirty else { fail("project_save") }
+    let exported = dir.appendingPathComponent("Drive Object.package")
+    guard let file = await s.projectExport(to: exported), FileManager.default.fileExists(atPath: file.path) else { fail("project_export") }
+    guard case .success(let installed)? = await s.projectInstall(), installed.path.hasPrefix(downloads.path) else { fail("project_install") }
+    guard case .failure(let f)? = await s.projectInstall(), case .remote(let e) = f, e.code == "exists" else { fail("second install should say exists") }
+    guard case .success? = await s.projectInstall(replace: true) else { fail("install with replace") }
+    s.close()
+    log("project: set/undo/redo, saved, exported \(file.lastPathComponent), installed into the scratch root")
+
+    let again = await open(project)
+    guard again.project?.identity.price == 77 else { fail("re-opened project lost the price") }
+    again.close()
+    let pkg = await open(exported)
+    guard !pkg.isProject, pkg.rows.allSatisfy({ $0.group == 0xFFFFFFFF }) else { fail("export is not a clean private-group package") }
+    let objs = await pkg.objects()
+    guard objs.count == 1, objs[0].guid == info.identity.guid, objs[0].price == 77 else { fail("export objects: \(objs)") }
+    pkg.close()
+    log("re-opened the project and the export: identity intact")
 }
 
 // A package of the user's, or a scratch copy of the Diploma donor.
