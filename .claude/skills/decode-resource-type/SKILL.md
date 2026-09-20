@@ -123,11 +123,18 @@ Some types are not an afternoon's work, and recognising that early is more
 useful than a parser fitted to one specimen.
 
 The signal is a version field with many values where the layout moves with it.
-TPRP, TRCN and SLOT each carry roughly eleven version values. A plausible
-structural hypothesis for TPRP left 12 trailing bytes on 247 of 275 specimens,
-and TRCN scattered across 57 different remainders. That is real archaeology —
-the `s2savediff.py` snapshot/change-one-thing/diff loop, or documentation from
-SimsWiki and Pick'N'Mix Mods — not a parser you can write from the corpus alone.
+TRCN and SLOT each carry roughly eleven version values, and a plausible
+structural hypothesis for TRCN scattered across 57 different trailing
+remainders. That is real archaeology — the `s2savediff.py`
+snapshot/change-one-thing/diff loop, or documentation from SimsWiki and
+Pick'N'Mix Mods — not a parser you can write from the corpus alone.
+
+Being wrong about this in the cheap direction is fine. TPRP was called
+archaeology here on the same evidence — a hypothesis that left 12 trailing
+bytes on 247 of 275 specimens — and was then decoded anyway once someone found
+the field that accounted for them. The point is not that hard types are
+impossible; it is that the honest report is "this needs archaeology" rather
+than a parser fitted to whichever specimen you opened first.
 
 Say that plainly instead of shipping something that half works. Partial coverage
 is fine when it is declared: `parse_ttab` handles 2 of the 11 TTAB versions in

@@ -135,6 +135,21 @@ def main() -> int:
             assert ov["objects"][0]["name"] and ov["headline"], ov
             assert isinstance(ov["objects"][0]["interactions"], list)
 
+            # TPRP, if the donor has one: decode, relabel a local, rebuild.
+            tp = next((r for r in rows if r["type"] == s2object.TYPE_TPRP), None)
+            if tp is not None:
+                ttgi = {k: tp[k] for k in ("type", "group", "instance", "instance_hi")}
+                got = c.call("get_resource", tgi=ttgi)
+                assert got["decoded"]["$type"] == "Tprp", got
+                dec = got["decoded"]
+                if dec["locals"]:
+                    dec["locals"][0] = "Smoke Local"
+                    c.call("put_resource", tgi=ttgi, decoded=dec)
+                    again = c.call("get_resource", tgi=ttgi)["decoded"]
+                    assert again["locals"][0] == "Smoke Local", again
+                    c.call("undo")
+                print("tprp: decoded", len(dec["params"]), "params,", len(dec["locals"]), "locals")
+
             # Names: every BHAV names itself; asking for one TGI gives just it.
             names = c.call("names")["names"]
             named = {(t, g, i, hi): n for t, g, i, hi, n in names}

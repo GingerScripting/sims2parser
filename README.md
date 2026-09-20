@@ -186,7 +186,7 @@ with the whole file-format side living in Python:
 
 - **Decoded editors** for every type the toolkit round-trips byte for byte:
   STR#/TTAs/CTSS string tables, OBJD (named fields and GUIDs), BCON, GLOB,
-  OBJf, TTAB, and **BHAV** — the instruction table with an operand form for the
+  OBJf, TTAB, TPRP (parameter and local labels), and **BHAV** — the instruction table with an operand form for the
   primitives whose layout is pinned, branch-target menus, insert/delete/move
   with automatic renumbering, and a one-click convert for the older base-game
   formats. Anything else shows as hex and passes through a save untouched.
