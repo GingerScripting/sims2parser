@@ -32,6 +32,7 @@ public final class PackageSession: ObservableObject, Identifiable {
     /// demand; `editCount` ticks after every change so the pane re-reads it.
     @Published public private(set) var overview: Overview?
     @Published public private(set) var editCount = 0
+    @Published public private(set) var looks: LooksInventory?
 
     /// What the table has selected. The detail pane follows a single
     /// selection; the context menu and split act on the whole set.
@@ -434,6 +435,87 @@ public final class PackageSession: ObservableObject, Identifiable {
         }
     }
 
+    // MARK: Looks
+
+    /// The model's parts and the looks so far, for the Looks page.
+    public func loadLooks() async -> LooksInventory? {
+        guard let c = client else { return nil }
+        do {
+            let inv = try await c.call("project_looks", as: LooksInventory.self)
+            looks = inv
+            return inv
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// Add a look; returns its id.
+    public func lookAdd(name: String) async -> String? {
+        guard let c = client else { return nil }
+        busy = true
+        defer { busy = false }
+        do {
+            let r = try await c.call("project_look_add", ["name": .string(name)], as: LookAddResult.self, timeout: 300)
+            summary = r.summary
+            await reloadIndex()
+            editCount += 1
+            return r.id
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// Change a look: any of its name, default flag and subsets. A subset
+    /// maps to a source, a picture's PNG bytes, or nil to put the original
+    /// back. One undo step.
+    public func lookSet(id: String, name: String? = nil, isDefault: Bool? = nil,
+                        subsets: [String: LookSource?] = [:], pictures: [String: Data] = [:]) async -> Bool {
+        var params: [String: JSONValue] = ["id": .string(id)]
+        if let name { params["name"] = .string(name) }
+        if let isDefault { params["default"] = .bool(isDefault) }
+        var subs: [String: JSONValue] = [:]
+        for (k, v) in subsets { subs[k] = v?.json ?? .null }
+        for (k, png) in pictures {
+            subs[k] = .object(["kind": .string("picture"), "png_b64": .string(png.base64EncodedString())])
+        }
+        if !subs.isEmpty { params["subsets"] = .object(subs) }
+        return await mutate(timeout: 600) {
+            self.summary = try await $0.call("project_look_set", params, as: PackageSummary.self, timeout: 600)
+            await self.reloadIndex()
+        }
+    }
+
+    public func lookRemove(id: String) async -> Bool {
+        await mutate(timeout: 300) {
+            self.summary = try await $0.call("project_look_remove", ["id": .string(id)], as: PackageSummary.self, timeout: 300)
+            await self.reloadIndex()
+        }
+    }
+
+    /// Keep (or drop) the game's own colour options on a cloned object.
+    public func setKeepGameOptions(_ keep: Bool) async -> Bool {
+        await mutate(timeout: 300) {
+            self.summary = try await $0.call("project_looks_set", ["keep_game_options": .bool(keep)], as: PackageSummary.self, timeout: 300)
+            await self.reloadIndex()
+        }
+    }
+
+    /// A small picture of what a source does to a subset; nil source = the original.
+    public func lookPreview(subset: String, source: LookSource?, side: Int = 128) async -> NSImage? {
+        guard let c = client else { return nil }
+        var params: [String: JSONValue] = ["subset": .string(subset), "side": .int(side)]
+        if let source { params["source"] = source.json }
+        do {
+            let r = try await c.call("project_look_preview", params, as: PNGResult.self)
+            return Data(base64Encoded: r.pngB64).flatMap(NSImage.init(data:))
+        } catch {
+            if !(error is CancellationError) { trace("lookPreview: \(error)") }
+            return nil
+        }
+    }
+
     // MARK: Object Workshop and tools
 
     public func objects() async -> [ObjectInfo] {
@@ -632,7 +714,7 @@ public final class PackageSession: ObservableObject, Identifiable {
     /// re-reading the selected resource afterwards so the detail pane never
     /// shows stale bytes.
     @discardableResult
-    private func mutate(_ body: (JSONRPCClient) async throws -> Void) async -> Bool {
+    private func mutate(timeout: TimeInterval = 120, _ body: (JSONRPCClient) async throws -> Void) async -> Bool {
         guard let c = client else {
             errorMessage = "The package is not open."
             return false

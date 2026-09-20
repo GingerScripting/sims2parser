@@ -10,7 +10,7 @@ struct ProjectWindow: View {
     @ObservedObject var session: PackageSession
 
     enum Page: Hashable { case identity, looks, interactions, resources }
-    @State private var page: Page = Launch.page == "resources" ? .resources : .identity
+    @State private var page: Page = Launch.page == "resources" ? .resources : Launch.page == "looks" ? .looks : .identity
     @State private var filter: TreeFilter = .all
     @State private var search = ""
     @State private var showNewResource = false
@@ -40,6 +40,12 @@ struct ProjectWindow: View {
         .navigationDocument(session.currentURL)
         .background(WindowEditedMarker(isEdited: session.isDirty))
         .focusedSceneValue(\.session, session)
+        .onAppear {
+            if session.project?.isRecolour == true, page == .identity { page = .looks }
+        }
+        .onChange(of: session.project?.isRecolour) { r in
+            if r == true, page == .identity { page = .looks }
+        }
         .task {
             if let d = await session.baseSwatch() {
                 swatch = NSImage(data: d)
@@ -86,12 +92,16 @@ struct ProjectWindow: View {
 
     private var sidebar: some View {
         List(selection: $page) {
-            Section("Object") {
-                Label("Name & Catalog", systemImage: "tag").tag(Page.identity)
+            Section(session.project?.isRecolour == true ? "Recolour" : "Object") {
+                if session.project?.isRecolour != true {
+                    Label("Name & Catalog", systemImage: "tag").tag(Page.identity)
+                }
+                Label("Looks", systemImage: "paintbrush").tag(Page.looks)
             }
-            Section("Coming later") {
-                Label("Looks", systemImage: "paintbrush").tag(Page.looks).foregroundStyle(.tertiary)
-                Label("Interactions", systemImage: "hand.tap").tag(Page.interactions).foregroundStyle(.tertiary)
+            if session.project?.isRecolour != true {
+                Section("Coming later") {
+                    Label("Interactions", systemImage: "hand.tap").tag(Page.interactions).foregroundStyle(.tertiary)
+                }
             }
             Section("Advanced") {
                 Label("Resources", systemImage: "list.bullet.rectangle").tag(Page.resources)
@@ -106,7 +116,7 @@ struct ProjectWindow: View {
         case .identity:
             IdentityPage(session: session, swatch: swatch)
         case .looks:
-            placeholder("Looks", "Recolors and new textures come in the next round.")
+            LooksPage(session: session)
         case .interactions:
             placeholder("Interactions", "Pie-menu options built from blocks come after that.")
         case .resources:
@@ -150,6 +160,7 @@ struct ProjectWindow: View {
                 if p.installed != nil { Text("Installed") }
             }
             Spacer()
+            if let n = session.project?.looks.items.count, n > 0 { Text("\(n) look\(n == 1 ? "" : "s")") }
             Text("\(session.rows.count) resources")
             if session.busy { ProgressView().controlSize(.small) }
         }

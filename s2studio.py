@@ -51,9 +51,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import base64
+from zlib import error as zlib_error
 
 import s2clone
 import s2doctor
+import s2looks
 import s2mesh
 import s2object
 import s2catalog
@@ -243,6 +245,11 @@ class Change:
 class Step:
     label: str
     changes: "list[Change]" = field(default_factory=list)
+    # A look edit also changes what the project remembers, which is not a
+    # view over the resources the way the identity is; the step carries the
+    # looks as they were and as they became so undo restores both.
+    looks_before: "dict | None" = None
+    looks_after: "dict | None" = None
 
     def size(self) -> int:
         return sum(c.size() for c in self.changes)
@@ -309,6 +316,8 @@ class Session:
         step = self.undo.pop()
         for c in reversed(step.changes):
             self._apply(c, forward=False)
+        if step.looks_before is not None and self.project is not None:
+            self.project.looks = s2looks.Looks.from_json(step.looks_before)
         self.redo.append(step)
         self.dirty = True
         self.bhav_names = None
@@ -320,6 +329,8 @@ class Session:
         step = self.redo.pop()
         for c in step.changes:
             self._apply(c, forward=True)
+        if step.looks_after is not None and self.project is not None:
+            self.project.looks = s2looks.Looks.from_json(step.looks_after)
         self.undo.append(step)
         self.dirty = True
         self.bhav_names = None
@@ -811,7 +822,7 @@ _OVERRIDE_TYPES = frozenset({
     s2object.TYPE_CTSS, s2object.TYPE_OBJD, 0x54505250, 0x5452434E,
 })
 _MESH_TYPES = frozenset({0xAC4F8687, 0x7BA3838C, 0xFC6EB1F7, 0xE519C933})
-_RECOLOUR_TYPES = frozenset({0xFC4B284B, 0x1C4A276C, 0x49596978, 0xCCA8E925, 0xEBCF3E27})
+_RECOLOUR_TYPES = frozenset({0xFC4B284B, 0x1C4A276C, 0x49596978, s2object.TYPE_MMAT, 0xCCA8E925, 0xEBCF3E27})
 _OVERVIEW_OBJECT_CAP = 300
 
 
@@ -924,7 +935,7 @@ def m_overview(session: Session, params: dict) -> dict:
     n_sims = count(s2neighborhood.TID_SDSC)
     n_mesh = count(0xAC4F8687)
     n_tex = count(0xFC4B284B, 0x1C4A276C)
-    n_mat = count(0x49596978, 0xCCA8E925)
+    n_mat = count(0x49596978, s2object.TYPE_MMAT, 0xCCA8E925)
     notes: "list[str]" = []
     if n_sims:
         kind = "neighborhood"
@@ -1675,14 +1686,21 @@ def m_catalog(session: Session, params: dict) -> dict:
     }
 
 
-def m_catalog_swatch(session: Session, params: dict) -> dict:
-    """One object's swatch as PNG, from the catalog cache or freshly resolved."""
+def _catalog_entry(params: dict) -> "s2catalog.CatalogEntry":
     fields = {k: params[k] for k in ("guid", "group", "source", "name", "description", "price",
                                       "room_flags", "function_flags", "tiles", "model", "swatch",
                                       "filename") if k in params}
-    for k, v in (("name", ""), ("description", ""), ("price", 0), ("room_flags", 0), ("function_flags", 0)):
+    for k, v in (("name", ""), ("description", ""), ("price", 0), ("room_flags", 0),
+                 ("function_flags", 0), ("group", 0)):
         fields.setdefault(k, v)
-    entry = s2catalog.CatalogEntry(**fields)
+    if "guid" not in fields or "source" not in fields:
+        raise RpcError("bad_params", "guid and source are required")
+    return s2catalog.CatalogEntry(**fields)
+
+
+def m_catalog_swatch(session: Session, params: dict) -> dict:
+    """One object's swatch as PNG, from the catalog cache or freshly resolved."""
+    entry = _catalog_entry(params)
     objects = Path(params["objects"]).expanduser() if params.get("objects") else None
     try:
         png = s2catalog.swatch(entry, objects_package=objects)
@@ -1723,7 +1741,13 @@ def m_project_new(session: Session, params: dict) -> dict:
     identity = s2workshop.Identity.from_json(params.get("identity") or {})
     if not identity.name:
         identity.name = base.name or path.stem
-    project = s2project.new(path, base, identity)
+    kind = str(params.get("kind") or s2project.KIND_OBJECT)
+    try:
+        project = s2project.new(path, base, identity, kind)
+    except ValueError as exc:
+        raise RpcError("bad_params", str(exc)) from None
+    for d in params.get("looks") or []:
+        project.looks.items.append(s2looks.Look.from_json(d))
     result = _open_project(session, project)
     try:
         s2project.save(project, session.resources)
@@ -1832,6 +1856,263 @@ def m_project_install(session: Session, params: dict) -> dict:
     return {**_summary(session), "file": str(dest)}
 
 
+# ---------------------------------------------------------------------------
+# Looks: the project's colour options
+# ---------------------------------------------------------------------------
+
+LOOK_SWATCH_SIDE = 128
+
+
+def _looks_inventory(session: Session, project: "s2project.Project") -> "s2looks.Inventory":
+    inv = session.cache.get("looks_inventory")
+    if inv is None:
+        try:
+            inv = s2project.inventory(project, session.resources)
+        except (OSError, ValueError, struct.error) as exc:
+            raise RpcError("build_failed", str(exc)) from None
+        session.cache["looks_inventory"] = inv
+    return inv
+
+
+def _looks_local(session: Session, project: "s2project.Project"):
+    return session.resources if project.base.source != "game" else None
+
+
+def _look_source(d, subset: "s2looks.Subset | None") -> "s2looks.TintSource | s2looks.PictureSource | None":
+    """A look source from its JSON; a picture arrives as png_b64."""
+    if d is None:
+        return None
+    if not isinstance(d, dict):
+        raise RpcError("bad_params", "a look source must be an object")
+    kind = str(d.get("kind", ""))
+    if kind == "picture":
+        if d.get("png_b64"):
+            try:
+                png = base64.b64decode(d["png_b64"])
+                w, h, _rgba = s2texture.read_png(png)
+            except (ValueError, struct.error, zlib_error) as exc:
+                raise RpcError("bad_image", f"that picture cannot be used: {exc}") from None
+            if subset is not None and subset.width and (w, h) != (subset.width, subset.height):
+                raise RpcError("bad_image", f"the picture is {w}x{h}; this part's texture is "
+                               f"{subset.width}x{subset.height}",
+                               {"expected_width": subset.width, "expected_height": subset.height})
+            return s2looks.PictureSource("", png=png)
+        return s2looks.PictureSource(str(d.get("file", "")), str(d.get("sha1", "")))
+    try:
+        return s2looks.source_from_json(d)
+    except ValueError as exc:
+        raise RpcError("bad_params", str(exc)) from None
+
+
+def _diff_step(label: str, before: "list[tuple]", session: Session,
+               looks_before: dict, looks_after: dict) -> "Step | None":
+    """One undo step from a snapshot of the resources to their state now:
+    modifications first, then removals from the highest old index down,
+    then additions from the lowest new index up, so replaying forward or
+    backward keeps every index valid."""
+    before_by = {tgi: (n, r) for n, (tgi, r) in enumerate(before)}
+    now_by = {r.tgi(): (n, r) for n, r in enumerate(session.resources)}
+    mods, removals, additions = [], [], []
+    for tgi, (n, r) in now_by.items():
+        old = before_by.get(tgi)
+        if old is None:
+            additions.append(Change(tgi, None, s2package.copy(r), n, False, False))
+        elif not s2package.same_bytes(old[1], r):
+            mods.append(Change(tgi, old[1], s2package.copy(r), n, False, False))
+    for tgi, (n, r) in before_by.items():
+        if tgi not in now_by:
+            removals.append(Change(tgi, r, None, n, False, False))
+    removals.sort(key=lambda c: -c.index)
+    additions.sort(key=lambda c: c.index)
+    changes = mods + removals + additions
+    if not changes and looks_before == looks_after:
+        return None
+    return Step(label, changes, looks_before, looks_after)
+
+
+def _relook(session: Session, label: str, mutate) -> dict:
+    """Apply `mutate(looks)` to the project's looks, rebuild the looks'
+    resources in place, and record it all as one undo step."""
+    project = _require_project(session)
+    before = [(r.tgi(), s2package.copy(r)) for r in session.resources]
+    looks_before = project.looks.to_json()
+    saved_looks = s2looks.Looks.from_json(looks_before)
+    try:
+        mutate(project.looks)
+        generated = s2looks.generated_tgis(session.resources)
+        session.resources[:] = [r for r in session.resources if r.tgi() not in generated]
+        added, warnings = s2project.render_looks(
+            project, session.resources, progress=lambda d, t, n: _progress("looks", d, t, n))
+        session.resources.extend(added)
+    except RpcError:
+        session.resources[:] = [old for _, old in before]
+        project.looks = saved_looks
+        raise
+    except (OSError, ValueError, struct.error) as exc:
+        session.resources[:] = [old for _, old in before]
+        project.looks = saved_looks
+        raise RpcError("build_failed", str(exc)) from None
+    step = _diff_step(label, before, session, looks_before, project.looks.to_json())
+    if step is not None:
+        session.push(step)
+    return {"changed": len(step.changes) if step else 0, **_summary(session)}
+
+
+def m_catalog_recolourable(session: Session, params: dict) -> dict:
+    """Which parts of a catalog object a colour option can change, for the
+    wizard: the model and its recolourable subsets, before any project
+    exists. Takes the same fields as catalog_swatch."""
+    entry = _catalog_entry(params)
+    local = None
+    model = entry.model
+    if entry.source != "game":
+        try:
+            local = s2writer.read_all_resources(Path(entry.source))
+        except (OSError, ValueError, struct.error) as exc:
+            raise RpcError("not_found", str(exc)) from None
+        if not model:
+            try:
+                model = s2looks.model_name(s2workshop.extract_object(local, entry.guid, whole_package=True).resources)
+            except (ValueError, struct.error):
+                model = ""
+    elif not model:
+        try:
+            _h, donor, _c = s2package.read_lazy(s2catalog.OBJECTS_PACKAGE)
+            model = s2looks.model_name(s2workshop.extract_object(donor, entry.guid).resources)
+        except (OSError, ValueError, struct.error):
+            model = ""
+    originals = [entry.guid] + [g for g in s2looks.model_guids(model) if g != entry.guid] if model else [entry.guid]
+    inv = s2looks.inventory(model, originals, local) if model else s2looks.Inventory("")
+    return {"model": inv.model, "guid": entry.guid,
+            "recolourable": [s.name for s in inv.subsets if s.recolourable],
+            "fixed": [s.name for s in inv.subsets if not s.recolourable],
+            "game_options": len(inv.game_options), "warnings": list(inv.warnings)}
+
+
+def m_project_looks(session: Session, params: dict) -> dict:
+    """What the Looks page shows: the model's subsets with their original
+    swatches, the looks so far, and how many colour options the game has."""
+    project = _require_project(session)
+    inv = _looks_inventory(session, project)
+    local = _looks_local(session, project)
+    subsets = []
+    for s in inv.subsets:
+        d = s.to_json()
+        if s.recolourable:
+            key = f"swatch:{s.texture}"
+            png = session.cache.get(key)
+            if png is None:
+                try:
+                    png = s2looks.base_png(s, local, LOOK_SWATCH_SIDE)
+                except (ValueError, struct.error):
+                    png = b""
+                session.cache[key] = png
+            if png:
+                d["swatch_png_b64"] = base64.b64encode(png).decode("ascii")
+        subsets.append(d)
+    return {"model": inv.model, "kind": project.kind, "subsets": subsets,
+            "looks": project.looks.to_json(), "game_options": len(inv.game_options),
+            "warnings": list(inv.warnings)}
+
+
+def m_project_look_add(session: Session, params: dict) -> dict:
+    name = str(params.get("name") or "")
+    default = bool(params.get("default", False))
+    look = s2looks.Look(s2looks.new_look_id(), name, default)
+
+    def mutate(looks: "s2looks.Looks") -> None:
+        if not look.name:
+            look.name = f"Look {len(looks.items) + 1}"
+        if default:
+            for l in looks.items:
+                l.default = False
+        looks.items.append(look)
+    result = _relook(session, "Add Look", mutate)
+    return {"id": look.id, **result}
+
+
+def m_project_look_set(session: Session, params: dict) -> dict:
+    """Change one look: its name, whether it is the default, and any of
+    its subsets (a source object, or null to put the original back)."""
+    project = _require_project(session)
+    look_id = str(_need(params, "id"))
+    if project.looks.get(look_id) is None:
+        raise RpcError("not_found", f"no look {look_id}")
+    inv = _looks_inventory(session, project)
+    wanted = params.get("subsets") or {}
+    sources = {}
+    for name, d in wanted.items():
+        subset = inv.subset(str(name))
+        if subset is None or not subset.recolourable:
+            raise RpcError("bad_params", f"{name} is not a part that can be recoloured")
+        sources[subset.name] = _look_source(d, subset)
+    labels = []
+    for name, src in sources.items():
+        labels.append(("Tint " if isinstance(src, s2looks.TintSource) else
+                       "Picture for " if src is not None else "Reset ") + name)
+    if "name" in params:
+        labels.append("Rename Look")
+    if "default" in params:
+        labels.append("Default Look")
+    label = labels[0] if len(labels) == 1 else "Change Look"
+
+    def mutate(looks: "s2looks.Looks") -> None:
+        look = looks.get(look_id)
+        if "name" in params:
+            look.name = str(params["name"])
+        if "default" in params:
+            if bool(params["default"]):
+                for l in looks.items:
+                    l.default = False
+            look.default = bool(params["default"])
+        for name, src in sources.items():
+            if src is None:
+                look.subsets.pop(name, None)
+            else:
+                look.subsets[name] = src
+    return _relook(session, label, mutate)
+
+
+def m_project_look_remove(session: Session, params: dict) -> dict:
+    project = _require_project(session)
+    look_id = str(_need(params, "id"))
+    if project.looks.get(look_id) is None:
+        raise RpcError("not_found", f"no look {look_id}")
+
+    def mutate(looks: "s2looks.Looks") -> None:
+        looks.items[:] = [l for l in looks.items if l.id != look_id]
+    return _relook(session, "Remove Look", mutate)
+
+
+def m_project_looks_set(session: Session, params: dict) -> dict:
+    """Options for all looks: whether the game's own colours are kept."""
+    keep = bool(_need(params, "keep_game_options"))
+
+    def mutate(looks: "s2looks.Looks") -> None:
+        looks.keep_game_options = keep
+    return _relook(session, "Game Colours", mutate)
+
+
+def m_project_look_preview(session: Session, params: dict) -> dict:
+    """A small PNG of what a source does to a subset; nothing changes."""
+    project = _require_project(session)
+    inv = _looks_inventory(session, project)
+    subset = inv.subset(str(_need(params, "subset")))
+    if subset is None or not subset.recolourable:
+        raise RpcError("bad_params", "that part cannot be recoloured")
+    src = _look_source(params.get("source"), None)
+    local = _looks_local(session, project)
+    side = int(params.get("side") or LOOK_SWATCH_SIDE)
+    try:
+        if src is None:
+            png = s2looks.base_png(subset, local, side)
+        else:
+            png = s2looks.preview_png(subset, src, project.read_file, local, side)
+    except (OSError, ValueError, struct.error) as exc:
+        raise RpcError("decode_failed", str(exc)) from None
+    return {"png_b64": base64.b64encode(png).decode("ascii")}
+
+
 def m_shutdown(session: Session, params: dict) -> dict:
     return {"bye": True}
 
@@ -1883,6 +2164,13 @@ METHODS = {
     "project_save": m_project_save,
     "project_export": m_project_export,
     "project_install": m_project_install,
+    "catalog_recolourable": m_catalog_recolourable,
+    "project_looks": m_project_looks,
+    "project_look_add": m_project_look_add,
+    "project_look_set": m_project_look_set,
+    "project_look_remove": m_project_look_remove,
+    "project_looks_set": m_project_looks_set,
+    "project_look_preview": m_project_look_preview,
     "hood_save_as": m_hood_save_as,
     "shutdown": m_shutdown,
 }

@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import SimStudioCore
 
 // Walks the editing flow the way the views do — through `PackageSession`,
@@ -142,6 +143,7 @@ func drive(_ scratch: URL) async {
 
     session.close()
     await driveProject(scratch.deletingLastPathComponent())
+    await driveLooks(scratch.deletingLastPathComponent())
     log("OK")
     exit(0)
 }
@@ -202,6 +204,82 @@ func driveProject(_ dir: URL) async {
     guard objs.count == 1, objs[0].guid == info.identity.guid, objs[0].price == 77 else { fail("export objects: \(objs)") }
     pkg.close()
     log("re-opened the project and the export: identity intact")
+}
+
+/// Looks on a game object: needs the game installed. A clone of the kitchen
+/// counter gets a tint and a picture on its countertop through undo, is
+/// saved and exported; then a plain recolour project of the same counter.
+@MainActor
+func driveLooks(_ dir: URL) async {
+    let counter: UInt32 = 0x8C26FB08
+    let catalog = CatalogService()
+    await catalog.load(refresh: false)
+    guard let base = catalog.entries.first(where: { $0.guid == counter && $0.isGame }) else {
+        log("skip: the game's counter is not in the catalog (game not installed?)")
+        catalog.close()
+        return
+    }
+    guard let r = await catalog.recolourable(for: base), r.recolourable.contains("countertop") else {
+        fail("catalog_recolourable did not list the countertop")
+    }
+    let project = dir.appendingPathComponent("Drive Counter.simobject")
+    let identity = ProjectIdentity(name: "Drive Counter", description: base.description, price: 5,
+                                   roomFlags: base.roomFlags, functionFlags: base.functionFlags)
+    guard await catalog.createProject(at: project, base: base, identity: identity) else {
+        fail("project_new (counter): \(catalog.errorMessage ?? "?")")
+    }
+    let reco = dir.appendingPathComponent("Drive Pink.simobject")
+    guard await catalog.createProject(at: reco, base: base, identity: identity, kind: .recolour, lookName: "Pink") else {
+        fail("project_new (recolour): \(catalog.errorMessage ?? "?")")
+    }
+    catalog.close()
+
+    let s = await open(project)
+    guard let inv = await s.loadLooks(), let top = inv.recolourable.first(where: { $0.name == "countertop" }),
+          top.width == 256, top.swatchPngB64 != nil, inv.gameOptions > 0 else { fail("project_looks (counter)") }
+    let before = s.rows.count
+    guard let id = await s.lookAdd(name: "Teal"), s.project?.looks.items.first?.id == id else { fail("project_look_add") }
+    guard await s.lookSet(id: id, subsets: ["countertop": .tint(color: "#147890", strength: 0.8, lightness: 0.1)]),
+          s.undoLabel == "Undo Tint countertop" else { fail("project_look_set tint: \(s.undoLabel)") }
+    let withLook = s.rows.count
+    guard withLook == before + 1 + 2 + 4 else { fail("tint added \(withLook - before) rows, expected 7") }
+    await s.undo()
+    guard s.rows.count == before, s.project?.looks.items.first?.subsets.isEmpty == true else { fail("undo of a tint") }
+    await s.redo()
+    guard s.rows.count == withLook else { fail("redo of a tint") }
+    guard let img = await s.lookPreview(subset: "countertop", source: .tint(color: "#FF0000", strength: 1, lightness: 0)),
+          img.size.width > 0 else { fail("project_look_preview") }
+    // A picture, the way the page makes one: any CGImage, normalised to the texture's size.
+    let space = CGColorSpaceCreateDeviceRGB()
+    let ctx = CGContext(data: nil, width: 64, height: 32, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(CGColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: 64, height: 32))
+    guard let png = ImageNormalizer.rgbaPNG(from: ctx.makeImage()!, width: top.width, height: top.height) else { fail("ImageNormalizer") }
+    guard await s.lookSet(id: id, isDefault: true, pictures: ["countertop": png]),
+          s.project?.looks.items.first?.isDefault == true else { fail("project_look_set picture") }
+    guard await s.projectSave(), !s.isDirty else { fail("project_save (counter)") }
+    guard FileManager.default.fileExists(atPath: project.appendingPathComponent("looks/\(id)/countertop.png").path) else { fail("picture not in the bundle") }
+    guard !FileManager.default.fileExists(atPath: project.appendingPathComponent("overrides").path) else { fail("looks leaked into overrides/") }
+    let exported = dir.appendingPathComponent("Drive Counter.package")
+    guard await s.projectExport(to: exported) != nil else { fail("project_export (counter)") }
+    s.close()
+    log("looks: counter inventory, tint through undo/redo, preview, picture, saved and exported")
+
+    let pkg = await open(exported)
+    let types = pkg.rows.map(\.type)
+    guard types.filter({ $0 == 0x1C4A276C }).count == 1, types.filter({ $0 == 0x49596978 }).count == 2,
+          types.filter({ $0 == 0x4C697E5A }).count == 4 + inv.gameOptions else { fail("export has the wrong look resources") }
+    pkg.close()
+
+    let p = await open(reco)
+    guard p.project?.isRecolour == true, p.project?.looks.items.count == 1, let pid = p.project?.looks.items.first?.id else { fail("recolour project did not open with its look") }
+    guard await p.lookSet(id: pid, subsets: ["countertop": .tint(color: "#F080B0", strength: 1, lightness: 0)]) else { fail("recolour tint") }
+    let recoTypes = p.rows.map(\.type).sorted()
+    guard recoTypes == [0x1C4A276C, 0x49596978, 0x49596978, 0x4C697E5A, 0x4C697E5A, 0x4C697E5A, 0x4C697E5A].sorted() else { fail("recolour rows: \(recoTypes.map { String($0, radix: 16) })") }
+    guard await p.projectExport(to: dir.appendingPathComponent("Drive Pink.package")) != nil else { fail("recolour export") }
+    p.close()
+    log("looks: a plain recolour project exports just MMAT, TXMT and TXTR")
 }
 
 // A package of the user's, or a scratch copy of the Diploma donor.

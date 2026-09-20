@@ -100,11 +100,176 @@ public struct ProjectInfo: Decodable {
     public let path: String
     public let name: String
     public let uuid: String
+    public let kind: ProjectKind
+    public let model: String
     public let base: ProjectBase
     public let identity: ProjectIdentity
+    public let looks: LooksInfo
     public let exported: String?
     public let installed: String?
     public let warnings: [String]
+
+    public var isRecolour: Bool { kind == .recolour }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        name = try c.decode(String.self, forKey: .name)
+        uuid = try c.decode(String.self, forKey: .uuid)
+        kind = try c.decodeIfPresent(ProjectKind.self, forKey: .kind) ?? .object
+        model = try c.decodeIfPresent(String.self, forKey: .model) ?? ""
+        base = try c.decode(ProjectBase.self, forKey: .base)
+        identity = try c.decodeIfPresent(ProjectIdentity.self, forKey: .identity)
+            ?? ProjectIdentity(name: "", description: "", price: 0, roomFlags: 0, functionFlags: 0)
+        looks = try c.decodeIfPresent(LooksInfo.self, forKey: .looks) ?? LooksInfo(items: [], keepGameOptions: true)
+        exported = try c.decodeIfPresent(String.self, forKey: .exported)
+        installed = try c.decodeIfPresent(String.self, forKey: .installed)
+        warnings = try c.decodeIfPresent([String].self, forKey: .warnings) ?? []
+    }
+    enum CodingKeys: String, CodingKey { case path, name, uuid, kind, model, base, identity, looks, exported, installed, warnings }
+}
+
+/// A clone with its own catalog entry, or a colour option on the base object.
+public enum ProjectKind: String, Codable {
+    case object, recolour
+}
+
+// MARK: - Looks (colour options)
+
+/// What a look does to one subset: a picture the user brought, or a tint
+/// over the game's texture. Encoded with a `kind` field the daemon reads.
+public enum LookSource: Equatable {
+    case picture(file: String, sha1: String)
+    case tint(color: String, strength: Double, lightness: Double)
+
+    public var isTint: Bool { if case .tint = self { return true } else { return false } }
+
+    public var json: JSONValue {
+        switch self {
+        case .picture(let file, let sha1):
+            return .object(["kind": .string("picture"), "file": .string(file), "sha1": .string(sha1)])
+        case .tint(let color, let strength, let lightness):
+            return .object(["kind": .string("tint"), "color": .string(color),
+                            "strength": .number(strength), "lightness": .number(lightness)])
+        }
+    }
+}
+
+extension LookSource: Decodable {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try c.decode(String.self, forKey: .kind)
+        if kind == "tint" {
+            self = .tint(color: try c.decodeIfPresent(String.self, forKey: .color) ?? "#808080",
+                         strength: try c.decodeIfPresent(Double.self, forKey: .strength) ?? 1,
+                         lightness: try c.decodeIfPresent(Double.self, forKey: .lightness) ?? 0)
+        } else {
+            self = .picture(file: try c.decodeIfPresent(String.self, forKey: .file) ?? "",
+                            sha1: try c.decodeIfPresent(String.self, forKey: .sha1) ?? "")
+        }
+    }
+    enum CodingKeys: String, CodingKey { case kind, color, strength, lightness, file, sha1 }
+}
+
+public struct Look: Decodable, Equatable, Identifiable {
+    public let id: String
+    public var name: String
+    public var isDefault: Bool
+    public var subsets: [String: LookSource]
+
+    public enum CodingKeys: String, CodingKey {
+        case id, name, subsets
+        case isDefault = "default"
+    }
+    public init(id: String, name: String, isDefault: Bool, subsets: [String: LookSource]) {
+        self.id = id
+        self.name = name
+        self.isDefault = isDefault
+        self.subsets = subsets
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        isDefault = try c.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
+        subsets = try c.decodeIfPresent([String: LookSource].self, forKey: .subsets) ?? [:]
+    }
+}
+
+public struct LooksInfo: Decodable, Equatable {
+    public var items: [Look]
+    public var keepGameOptions: Bool
+    public enum CodingKeys: String, CodingKey {
+        case items
+        case keepGameOptions = "keep_game_options"
+    }
+    public init(items: [Look], keepGameOptions: Bool) {
+        self.items = items
+        self.keepGameOptions = keepGameOptions
+    }
+}
+
+/// One part of the model, as the Looks page lists it.
+public struct SubsetInfo: Decodable, Identifiable, Equatable {
+    public let name: String
+    public let material: String
+    public let texture: String
+    public let recolourable: Bool
+    public let width: Int
+    public let height: Int
+    public let states: [String]
+    public let swatchPngB64: String?
+    public var id: String { name }
+    public enum CodingKeys: String, CodingKey {
+        case name, material, texture, recolourable, width, height, states
+        case swatchPngB64 = "swatch_png_b64"
+    }
+}
+
+/// The reply to `project_looks`.
+public struct LooksInventory: Decodable {
+    public let model: String
+    public let kind: ProjectKind
+    public let subsets: [SubsetInfo]
+    public let looks: LooksInfo
+    public let gameOptions: Int
+    public let warnings: [String]
+    public var recolourable: [SubsetInfo] { subsets.filter(\.recolourable) }
+    public var fixed: [SubsetInfo] { subsets.filter { !$0.recolourable } }
+    public enum CodingKeys: String, CodingKey {
+        case model, kind, subsets, looks, warnings
+        case gameOptions = "game_options"
+    }
+}
+
+/// The reply to `catalog_recolourable`: what a colour option could change
+/// on a catalog object, before any project exists.
+public struct Recolourable: Decodable {
+    public let model: String
+    public let guid: UInt32
+    public let recolourable: [String]
+    public let fixed: [String]
+    public let gameOptions: Int
+    public enum CodingKeys: String, CodingKey {
+        case model, guid, recolourable, fixed
+        case gameOptions = "game_options"
+    }
+}
+
+public struct LookAddResult: Decodable {
+    public let id: String
+    public let summary: PackageSummary
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        summary = try PackageSummary(from: decoder)
+    }
+    enum CodingKeys: String, CodingKey { case id }
+}
+
+public struct PNGResult: Decodable {
+    public let pngB64: String
+    public enum CodingKeys: String, CodingKey { case pngB64 = "png_b64" }
 }
 
 /// One buyable object the catalog knows.
