@@ -28,6 +28,7 @@ from pathlib import Path
 import s2ltw
 import s2luastate
 import s2ngbh
+import s2romance
 from s2parser import open_package, read_resource
 
 TID_SDSC = 0xAACE2EFB
@@ -594,6 +595,7 @@ def extract_hood(nbr_dir: Path) -> dict | None:
         s.setdefault("businesses", [])
         s["badges"] = badges.get(nid, {})
         s["perks"] = perks.get(nid, {"points": 0, "perks": {}})
+    s2romance.annotate(sims, ngbh, name_of)
 
     hood = {
         "id": hood_id,

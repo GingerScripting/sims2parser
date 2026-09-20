@@ -57,6 +57,32 @@ struct Relationship: Decodable, Hashable {
     var name: String
 }
 
+/// One thing that happened between two sims — a kiss, a date, a proposal turned
+/// down — as `s2romance.history` reads it out of the sim's memories. `seq`
+/// orders a sim's romantic events across all their partners; the game stores
+/// no usable date (a memory's timestamp is the calendar of the lot it happened
+/// on, and every lot keeps its own).
+struct RomanceEvent: Decodable, Hashable {
+    var kind: String
+    var label: String
+    var seq: Int
+}
+
+/// Everything a sim remembers doing with one other sim, oldest first.
+struct RomancePartner: Decodable, Hashable, Identifiable {
+    var nid: Int
+    var name: String
+    var counts: [String: Int]
+    var events: [RomanceEvent]
+
+    var id: Int { nid }
+
+    /// Courtship order, for the row's chips. Mirrors `s2romance.KINDS`.
+    static let kinds = ["date", "kiss", "makeout", "woohoo", "love", "steady",
+                        "engaged", "married", "affair", "rejected", "breakup"]
+    var kindsPresent: [String] { Self.kinds.filter { counts[$0] != nil } }
+}
+
 /// Open for Business perks, as `s2luastate.sim_perks` writes them: unspent
 /// points, plus the bought perks of each track in tier order. Only tracks with
 /// something bought appear — an untouched track is simply absent.
@@ -203,6 +229,9 @@ struct Sim: Decodable, Identifiable, Hashable {
     var loves: [String]
     var bestFriends: [String]
     var enemies: [String]
+    /// Romantic history by partner, in order of first event. Nil in a
+    /// sims.json cached before the extractor read it — re-extract to fill it.
+    var romance: [RomancePartner]?
     /// Optional so a sims.json cached by a build that ignored these still decodes.
     var perks: PerkState?
     var badges: [String: Badge]?

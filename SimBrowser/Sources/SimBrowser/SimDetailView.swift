@@ -8,6 +8,7 @@ struct SimDetailView: View {
     var journalMentions: [JournalMention] = []
     var onOpenJournal: (UUID) -> Void = { _ in }
     var onShowFamilyTree: () -> Void = {}
+    @State private var openPartners: Set<Int> = []
 
     var body: some View {
         ScrollView {
@@ -22,6 +23,7 @@ struct SimDetailView: View {
                 if sim.hasBadges { badgesSection }
                 if !householdBusinesses.isEmpty { businessesSection }
                 if sim.hasBusinessPerks { businessPerksSection }
+                if let romance = sim.romance, !romance.isEmpty { romanceSection(romance) }
                 relationshipsSection
                 footer
             }
@@ -508,6 +510,96 @@ struct SimDetailView: View {
             Spacer()
         }
         .padding(.vertical, 4)
+    }
+
+    // MARK: romantic history
+
+    private func romanceSection(_ partners: [RomancePartner]) -> some View {
+        let woohoo = partners.filter { $0.counts["woohoo"] != nil }.count
+        return section("Romantic History") {
+            Text("\(partners.count) \(partners.count == 1 ? "sim" : "sims")"
+                 + (woohoo > 0 ? " · WooHoo with \(woohoo)" : "")
+                 + " · from memories, oldest first")
+                .font(.caption).foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                ForEach(partners) { partner in
+                    partnerRow(partner)
+                    Divider().opacity(0.4)
+                }
+            }
+        }
+    }
+
+    private func partnerRow(_ partner: RomancePartner) -> some View {
+        let open = openPartners.contains(partner.nid)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                Button {
+                    if open { openPartners.remove(partner.nid) } else { openPartners.insert(partner.nid) }
+                } label: {
+                    Image(systemName: open ? "chevron.down" : "chevron.right")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .frame(width: 10)
+                }
+                .buttonStyle(.plain)
+                // By id, not name: full names repeat within a hood.
+                if let target = hood?.sims.first(where: { $0.nid == partner.nid }) {
+                    Button(partner.name) { onSelect(target) }
+                        .buttonStyle(.link)
+                        .frame(minWidth: 150, alignment: .leading)
+                } else {
+                    Text(partner.name).frame(minWidth: 150, alignment: .leading)
+                }
+                FlowLayout(spacing: 4) {
+                    ForEach(partner.kindsPresent, id: \.self) { kind in
+                        let n = partner.counts[kind] ?? 1
+                        chip(romanceKindName(kind) + (n > 1 ? " ×\(n)" : ""), romanceColor(kind))
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            if open {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(Array(partner.events.enumerated()), id: \.offset) { _, event in
+                        HStack(spacing: 8) {
+                            Circle().fill(romanceColor(event.kind)).frame(width: 6, height: 6)
+                            Text(event.label).font(.callout)
+                        }
+                    }
+                }
+                .padding(.leading, 22)
+                .padding(.bottom, 4)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func romanceKindName(_ kind: String) -> String {
+        switch kind {
+        case "date": return "Dated"
+        case "kiss": return "Kissed"
+        case "makeout": return "Made out"
+        case "woohoo": return "WooHoo"
+        case "love": return "In love"
+        case "steady": return "Went steady"
+        case "engaged": return "Engaged"
+        case "married": return "Married"
+        case "affair": return "Cheating"
+        case "rejected": return "Turned down"
+        case "breakup": return "Broke up"
+        default: return kind.capitalized
+        }
+    }
+
+    private func romanceColor(_ kind: String) -> Color {
+        switch kind {
+        case "date": return .purple
+        case "kiss", "makeout", "love": return .pink
+        case "woohoo", "steady", "engaged", "married": return .red
+        case "affair", "rejected": return .orange
+        case "breakup": return .gray
+        default: return .secondary
+        }
     }
 
     private func chip(_ text: String, _ color: Color) -> some View {
